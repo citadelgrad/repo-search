@@ -15,7 +15,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 # Git operations
-git2 = "0.19"
+git2 = { version = "0.20", features = ["vendored-libgit2", "vendored-openssl"] }
 
 # Full-text search (BM25)
 tantivy = "0.22"
