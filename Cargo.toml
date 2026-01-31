@@ -6,9 +6,9 @@ description = "Clone and search git repos with BM25, vector search, and LLM re-r
 
 [dependencies]
 # Web framework
-axum = { version = "0.7", features = ["json", "multipart"] }
+axum = { version = "0.8", features = ["json", "multipart"] }
 tokio = { version = "1", features = ["full"] }
-tower-http = { version = "0.5", features = ["cors", "fs"] }
+tower-http = { version = "0.6", features = ["cors", "fs"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -18,16 +18,16 @@ serde_json = "1"
 git2 = { version = "0.20", features = ["vendored-libgit2", "vendored-openssl"] }
 
 # Full-text search (BM25)
-tantivy = "0.22"
+tantivy = "0.25"
 
 # HTTP client (for Ollama / cloud LLM APIs)
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.13", features = ["json"] }
 
 # Utilities
 uuid = { version = "1", features = ["v4", "serde"] }
 walkdir = "2"
 anyhow = "1"
-thiserror = "1"
+thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 chrono = { version = "0.4", features = ["serde"] }
