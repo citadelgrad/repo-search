@@ -182,6 +182,138 @@ pub async fn update_config(
     Json(config.clone())
 }
 
+/// POST /api/repos/:id/reindex - Re-generate vector embeddings for an already-indexed repo
+pub async fn reindex_repo(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    // Validate repo exists and is Ready
+    {
+        let repos = state.repos.read();
+        let repo = repos.iter().find(|r| r.id == id);
+        match repo {
+            None => return Err((StatusCode::NOT_FOUND, "Repo not found".to_string())),
+            Some(r) if r.status != RepoStatus::Ready => {
+                return Err((
+                    StatusCode::CONFLICT,
+                    "Repo must be in ready state to re-index".to_string(),
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    // Set status to Embedding
+    update_repo_status(&state, id, RepoStatus::Embedding);
+
+    // Spawn background task
+    let state_clone = state.clone();
+    tokio::spawn(async move {
+        if let Err(e) = reindex_embeddings(state_clone, id).await {
+            tracing::error!("Failed to re-index embeddings for {id}: {e:#}");
+        }
+    });
+
+    Ok(StatusCode::OK)
+}
+
+/// Re-generate vector embeddings for an already-cloned repo.
+async fn reindex_embeddings(state: AppState, repo_id: Uuid) -> anyhow::Result<()> {
+    let (repo_name, repo_dir) = {
+        let repos = state.repos.read();
+        let repo = repos
+            .iter()
+            .find(|r| r.id == repo_id)
+            .ok_or_else(|| anyhow::anyhow!("Repo not found"))?;
+        (
+            repo.name.clone(),
+            state.config.repos_dir().join(repo_id.to_string()),
+        )
+    };
+
+    if !repo_dir.exists() {
+        update_repo_status(
+            &state,
+            repo_id,
+            RepoStatus::Error("Cloned repo directory not found".to_string()),
+        );
+        anyhow::bail!("Cloned repo directory not found for {repo_name}");
+    }
+
+    // Walk files and chunk them
+    let repo_dir_walk = repo_dir.clone();
+    let files =
+        tokio::task::spawn_blocking(move || crate::git::walk_repo_files(&repo_dir_walk)).await?;
+
+    tracing::info!(
+        "Re-indexing: found {} files in {repo_name}",
+        files.len()
+    );
+
+    let mut all_chunks = Vec::new();
+    for file in &files {
+        let chunks = chunk_file(repo_id, &file.relative_path, &file.content, &file.language);
+        all_chunks.extend(chunks);
+    }
+
+    // Clear stale vectors
+    if let Err(e) = state.vectors.delete_repo(&repo_id) {
+        tracing::warn!("Failed to delete old vectors for {repo_name}: {e}");
+    }
+
+    // Generate new embeddings
+    let texts: Vec<String> = all_chunks
+        .iter()
+        .map(|c| format!("File: {}\n{}", c.file_path, c.content))
+        .collect();
+
+    let chunk_metadata: Vec<(String, usize, String, String, usize, usize)> = all_chunks
+        .iter()
+        .map(|c| {
+            (
+                c.file_path.clone(),
+                c.chunk_index,
+                c.content.clone(),
+                c.language.clone(),
+                c.start_line,
+                c.end_line,
+            )
+        })
+        .collect();
+
+    let llm_config = state.llm_config.read().clone();
+    match crate::llm::embeddings::embed_batch(&state.http_client, &llm_config, &texts).await {
+        Ok(embeddings) => {
+            state
+                .vectors
+                .add_chunks(repo_id, &repo_name, &chunk_metadata, embeddings)?;
+            tracing::info!("Re-index: vector embeddings complete for {repo_name}");
+        }
+        Err(e) => {
+            update_repo_status(
+                &state,
+                repo_id,
+                RepoStatus::Error(format!("Embedding failed: {e:#}")),
+            );
+            anyhow::bail!("Embedding failed for {repo_name}: {e:#}");
+        }
+    }
+
+    // Mark as ready again
+    {
+        let mut repos = state.repos.write();
+        if let Some(repo) = repos.iter_mut().find(|r| r.id == repo_id) {
+            repo.status = RepoStatus::Ready;
+            repo.indexed_at = Some(Utc::now());
+        }
+        drop(repos);
+        state.persist_repos();
+    }
+
+    tracing::info!("Re-index complete for {repo_name}");
+    Ok(())
+}
+
 /// Clone a repo and index its files.
 async fn clone_and_index(
     state: AppState,

@@ -19,6 +19,7 @@ pub struct Repo {
 pub enum RepoStatus {
     Cloning,
     Indexing,
+    Embedding,
     Ready,
     Error(String),
 }
@@ -89,6 +90,25 @@ pub struct SearchResponse {
     pub results: Vec<SearchHit>,
     pub total_bm25_hits: usize,
     pub total_vector_hits: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_repo_status_embedding_serializes_to_snake_case() {
+        let json = serde_json::to_value(RepoStatus::Embedding).unwrap();
+        assert_eq!(json, "embedding");
+    }
+
+    #[test]
+    fn test_repo_status_embedding_round_trips() {
+        let status = RepoStatus::Embedding;
+        let json = serde_json::to_string(&status).unwrap();
+        let back: RepoStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, RepoStatus::Embedding);
+    }
 }
 
 /// LLM config update request

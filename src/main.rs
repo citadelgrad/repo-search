@@ -31,6 +31,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/repos", get(api::repos::list_repos))
         .route("/api/repos", post(api::repos::add_repo))
         .route("/api/repos/{id}", delete(api::repos::delete_repo))
+        .route("/api/repos/{id}/reindex", post(api::repos::reindex_repo))
         .route("/api/search", post(api::search::search))
         .route("/api/config", get(api::repos::get_config))
         .route("/api/config", put(api::repos::update_config))

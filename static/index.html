@@ -344,7 +344,7 @@
   }
 
   .status-badge.ready { background: #0d3117; color: var(--green); }
-  .status-badge.cloning, .status-badge.indexing { background: #2d1b00; color: var(--yellow); }
+  .status-badge.cloning, .status-badge.indexing, .status-badge.embedding { background: #2d1b00; color: var(--yellow); }
   .status-badge.error { background: #3d1216; color: var(--red); }
 
   .repo-card .delete-btn {
@@ -360,6 +360,22 @@
   .repo-card .delete-btn:hover {
     background: #3d1216;
     border-color: var(--red);
+  }
+
+  .repo-card .reindex-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--accent);
+    padding: 6px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+  }
+
+  .repo-card .reindex-btn:hover {
+    background: var(--accent-dim);
+    border-color: var(--accent);
+    color: #fff;
   }
 
   /* ── Settings Page ───────────────────────────── */
@@ -625,7 +641,7 @@ function renderRepoChips() {
   const filterDiv = document.getElementById('repo-filter');
   const chipsDiv = document.getElementById('repo-chips');
 
-  const readyRepos = cachedRepos.filter(r => r.status === 'ready' || r.status === 'cloning' || r.status === 'indexing');
+  const readyRepos = cachedRepos.filter(r => r.status === 'ready' || r.status === 'cloning' || r.status === 'indexing' || r.status === 'embedding');
 
   if (readyRepos.length === 0) {
     filterDiv.style.display = 'none';
@@ -642,7 +658,7 @@ function renderRepoChips() {
 
   chipsDiv.innerHTML = readyRepos.map((r, i) => {
     const selected = selectedRepoIds.has(r.id);
-    const isPending = r.status === 'cloning' || r.status === 'indexing';
+    const isPending = r.status === 'cloning' || r.status === 'indexing' || r.status === 'embedding';
     const color = repoColor(i);
     return `<span class="repo-chip ${selected ? 'selected' : ''} ${isPending ? 'status-pending' : ''}"
                   data-id="${r.id}"
@@ -802,7 +818,8 @@ async function loadRepos() {
     listDiv.innerHTML = repos.map(r => {
       const statusClass = typeof r.status === 'string' ? r.status : 'error';
       const statusText = typeof r.status === 'string' ? r.status : `error: ${r.status.error}`;
-      const isProcessing = statusText === 'cloning' || statusText === 'indexing';
+      const isProcessing = statusText === 'cloning' || statusText === 'indexing' || statusText === 'embedding';
+      const isReady = statusText === 'ready';
       return `
         <div class="repo-card">
           <div class="info">
@@ -814,13 +831,14 @@ async function loadRepos() {
             </div>
           </div>
           <span class="status-badge ${esc(statusClass)}">${isProcessing ? '<span class="spinner"></span>' : ''}${esc(statusText)}</span>
+          ${isReady ? `<button class="reindex-btn" onclick="reindexRepo('${r.id}')">Re-index</button>` : ''}
           <button class="delete-btn" onclick="deleteRepo('${r.id}')">Delete</button>
         </div>
       `;
     }).join('');
 
     // Auto-poll if any repos are still processing
-    const processing = repos.some(r => r.status === 'cloning' || r.status === 'indexing');
+    const processing = repos.some(r => r.status === 'cloning' || r.status === 'indexing' || r.status === 'embedding');
     if (processing && !repoPolling) {
       repoPolling = setInterval(loadRepos, 3000);
     } else if (!processing && repoPolling) {
@@ -874,6 +892,24 @@ async function deleteRepo(id) {
     refreshRepoFilter();
   } catch (err) {
     toast('Failed to delete: ' + err.message);
+  }
+}
+
+async function reindexRepo(id) {
+  try {
+    const resp = await fetch(API + `/api/repos/${id}/reindex`, { method: 'POST' });
+    if (!resp.ok) {
+      const err = await resp.text();
+      throw new Error(err);
+    }
+    toast('Re-indexing embeddings in background');
+    loadRepos();
+
+    if (!repoPolling) {
+      repoPolling = setInterval(() => { loadRepos(); refreshRepoFilter(); }, 3000);
+    }
+  } catch (err) {
+    toast('Failed to re-index: ' + err.message);
   }
 }
 
