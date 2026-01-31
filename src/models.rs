@@ -111,6 +111,32 @@ mod tests {
     }
 }
 
+/// Chat request
+#[derive(Debug, Clone, Deserialize)]
+pub struct ChatRequest {
+    pub message: String,
+    pub history: Option<Vec<ChatMessage>>,
+    /// Filter by repo IDs (same as SearchRequest)
+    pub repo_ids: Option<Vec<Uuid>>,
+}
+
+/// A single chat turn (user or assistant)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatMessage {
+    pub role: String,
+    pub content: String,
+}
+
+/// Source reference sent in the SSE `context` event
+#[derive(Debug, Clone, Serialize)]
+pub struct ContextSnippet {
+    pub repo_name: String,
+    pub file_path: String,
+    pub start_line: usize,
+    pub end_line: usize,
+    pub language: String,
+}
+
 /// LLM config update request
 #[derive(Debug, Clone, Deserialize)]
 pub struct LlmConfigUpdate {

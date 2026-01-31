@@ -16,6 +16,7 @@ pub struct AppState {
     pub http_client: reqwest::Client,
     pub llm_config: Arc<RwLock<LlmConfig>>,
     pub clone_semaphore: Arc<tokio::sync::Semaphore>,
+    pub chat_semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 impl AppState {
@@ -51,6 +52,7 @@ impl AppState {
                 .build()?,
             llm_config: Arc::new(RwLock::new(llm_config)),
             clone_semaphore: Arc::new(tokio::sync::Semaphore::new(max_concurrent_clones)),
+            chat_semaphore: Arc::new(tokio::sync::Semaphore::new(3)),
         })
     }
 

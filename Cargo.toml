@@ -21,7 +21,8 @@ git2 = { version = "0.20", features = ["vendored-libgit2", "vendored-openssl"] }
 tantivy = "0.25"
 
 # HTTP client (for Ollama / cloud LLM APIs)
-reqwest = { version = "0.13", features = ["json"] }
+reqwest = { version = "0.13", features = ["json", "stream"] }
+futures-util = "0.3"
 
 # Utilities
 uuid = { version = "1", features = ["v4", "serde"] }
