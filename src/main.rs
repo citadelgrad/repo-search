@@ -1,8 +1,6 @@
-use axum::http::header;
 use axum::response::Html;
 use axum::routing::{delete, get, post, put};
 use axum::Router;
-use tower_http::cors::{Any, CorsLayer};
 use tracing_subscriber::EnvFilter;
 
 use repo_search::api;
@@ -24,11 +22,8 @@ async fn main() -> anyhow::Result<()> {
 
     let state = AppState::new(config.clone())?;
 
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(vec![header::CONTENT_TYPE, header::AUTHORIZATION]);
-
+    // No CORS layer: the SPA is served from the same origin so cross-origin
+    // access is unnecessary. This prevents drive-by attacks from malicious pages.
     let app = Router::new()
         // Serve frontend
         .route("/", get(serve_index))
@@ -39,7 +34,6 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/search", post(api::search::search))
         .route("/api/config", get(api::repos::get_config))
         .route("/api/config", put(api::repos::update_config))
-        .layer(cors)
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(&config.bind_addr).await?;

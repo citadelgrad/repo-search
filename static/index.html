@@ -549,8 +549,8 @@
         </select>
       </div>
       <div class="form-group">
-        <label>Base URL</label>
-        <input type="text" id="cfg-base-url" placeholder="http://localhost:11434">
+        <label>Base URL <small>(set via LLM_BASE_URL env var)</small></label>
+        <input type="text" id="cfg-base-url" placeholder="http://localhost:11434" disabled>
       </div>
       <div class="form-group">
         <label>Chat Model (re-ranking / query expansion)</label>
@@ -898,7 +898,7 @@ async function loadConfig() {
 async function saveConfig() {
   const update = {
     provider: document.getElementById('cfg-provider').value,
-    base_url: document.getElementById('cfg-base-url').value,
+    // base_url is immutable at runtime (env var only) — not sent
     chat_model: document.getElementById('cfg-chat-model').value,
     embedding_model: document.getElementById('cfg-embed-model').value,
     embedding_dim: parseInt(document.getElementById('cfg-embed-dim').value) || 768,

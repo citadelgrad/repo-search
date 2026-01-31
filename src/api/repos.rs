@@ -164,9 +164,8 @@ pub async fn update_config(
     if let Some(provider) = update.provider {
         config.provider = provider;
     }
-    if let Some(base_url) = update.base_url {
-        config.base_url = base_url;
-    }
+    // base_url is immutable at runtime (set via LLM_BASE_URL env var only)
+    // to prevent SSRF: an attacker changing it could exfiltrate the API key
     if let Some(chat_model) = update.chat_model {
         config.chat_model = chat_model;
     }

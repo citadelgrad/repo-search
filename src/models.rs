@@ -95,7 +95,7 @@ pub struct SearchResponse {
 #[derive(Debug, Clone, Deserialize)]
 pub struct LlmConfigUpdate {
     pub provider: Option<String>,
-    pub base_url: Option<String>,
+    // base_url intentionally omitted: immutable at runtime to prevent SSRF
     pub chat_model: Option<String>,
     pub embedding_model: Option<String>,
     pub api_key: Option<String>,

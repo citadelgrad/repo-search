@@ -8,7 +8,7 @@ description = "Clone and search git repos with BM25, vector search, and LLM re-r
 # Web framework
 axum = { version = "0.8", features = ["json", "multipart"] }
 tokio = { version = "1", features = ["full"] }
-tower-http = { version = "0.6", features = ["cors", "fs"] }
+
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
