@@ -3,6 +3,25 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::LlmConfig;
 
+/// Maximum characters to send per text to the embedding API.
+/// nomic-embed-text (Ollama default) has a 2 048-token context; code tokenises
+/// roughly 1 token per 2-3 chars, so 4 000 chars ≈ 1 300–2 000 tokens.
+/// We also pass `truncate: true` to Ollama so it trims at the token boundary.
+const MAX_EMBED_CHARS: usize = 4_000;
+
+/// Truncate `text` to at most `MAX_EMBED_CHARS`, splitting on a UTF-8 char boundary.
+fn truncate_for_embedding(text: &str) -> &str {
+    if text.len() <= MAX_EMBED_CHARS {
+        return text;
+    }
+    // Find the last char boundary at or before the limit
+    let mut end = MAX_EMBED_CHARS;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
 /// Generate embeddings for a batch of texts using the configured LLM provider.
 pub async fn embed_batch(
     client: &reqwest::Client,
@@ -13,9 +32,14 @@ pub async fn embed_batch(
         return Ok(Vec::new());
     }
 
+    let truncated: Vec<String> = texts
+        .iter()
+        .map(|t| truncate_for_embedding(t).to_string())
+        .collect();
+
     match config.provider.as_str() {
-        "ollama" => embed_ollama(client, config, texts).await,
-        "openai" => embed_openai(client, config, texts).await,
+        "ollama" => embed_ollama(client, config, &truncated).await,
+        "openai" => embed_openai(client, config, &truncated).await,
         other => anyhow::bail!("Unknown LLM provider: {other}"),
     }
 }
@@ -39,6 +63,9 @@ pub async fn embed_single(
 struct OllamaEmbedRequest {
     model: String,
     input: Vec<String>,
+    /// Ask Ollama to silently truncate inputs that exceed the model's context
+    /// length instead of returning a 400 error.
+    truncate: bool,
 }
 
 #[derive(Deserialize)]
@@ -61,6 +88,7 @@ async fn embed_ollama(
         let req = OllamaEmbedRequest {
             model: config.embedding_model.clone(),
             input: chunk.to_vec(),
+            truncate: true,
         };
 
         let resp = client
