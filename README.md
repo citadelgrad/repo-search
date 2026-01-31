@@ -182,7 +182,7 @@ cargo build --release
 ./target/release/repo-search
 ```
 
-The server starts on `http://localhost:3000`.
+The server starts on `http://localhost:7000`.
 
 ### Run Tests
 
@@ -190,7 +190,7 @@ The server starts on `http://localhost:3000`.
 cargo test
 ```
 
-90 tests: 84 unit tests + 6 integration tests covering:
+95 tests: 89 unit tests + 6 integration tests covering:
 - BM25 indexing, search, deletion, persistence, repo filtering
 - Cosine similarity edge cases, vector store CRUD, persistence
 - Multi-query RRF fusion, weighting, deduplication, top-rank bonus
@@ -212,6 +212,12 @@ cargo test
 | `LLM_EMBEDDING_MODEL` | `nomic-embed-text` | Model for embeddings |
 | `LLM_EMBEDDING_DIM` | `768` | Embedding vector dimension |
 | `LLM_API_KEY` | - | API key (cloud providers only) |
+| `REPO_SEARCH_GIT_TOKEN` | - | Git PAT for cloning private repos |
+| `REPO_SEARCH_MAX_REPOS` | `50` | Maximum number of repos allowed |
+| `REPO_SEARCH_MAX_REPO_SIZE_MB` | `500` | Maximum repo size after clone (MB) |
+| `REPO_SEARCH_CLONE_TIMEOUT_SECS` | `300` | Clone timeout in seconds |
+| `REPO_SEARCH_MAX_CONCURRENT_CLONES` | `2` | Parallel clone limit |
+| `REPO_SEARCH_MAX_VECTOR_ENTRIES` | `500000` | Max in-memory vector entries |
 
 ## API
 
@@ -222,7 +228,7 @@ cargo test
 | `DELETE` | `/api/repos/{id}` | Delete a repo and its index |
 | `POST` | `/api/search` | Hybrid search (see below) |
 | `GET` | `/api/config` | Get LLM configuration |
-| `PUT` | `/api/config` | Update LLM configuration |
+| `PUT` | `/api/config` | Update LLM configuration (`base_url` is read-only) |
 
 ### Search Request
 

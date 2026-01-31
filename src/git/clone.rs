@@ -11,9 +11,27 @@ pub struct RepoFile {
 }
 
 /// Clone a git repository to the target directory.
-pub fn clone_repo(url: &str, target: &Path) -> Result<()> {
+///
+/// When `git_token` is provided it is used as an HTTPS personal-access-token
+/// (works with GitHub, GitLab, Bitbucket, etc.).
+pub fn clone_repo(url: &str, target: &Path, git_token: Option<&str>) -> Result<()> {
     tracing::info!("Cloning {} into {}", url, target.display());
-    git2::Repository::clone(url, target)
+
+    let mut builder = git2::build::RepoBuilder::new();
+
+    if let Some(token) = git_token {
+        let token = token.to_string();
+        let mut callbacks = git2::RemoteCallbacks::new();
+        callbacks.credentials(move |_url, _username, _allowed| {
+            git2::Cred::userpass_plaintext("x-access-token", &token)
+        });
+        let mut fetch_opts = git2::FetchOptions::new();
+        fetch_opts.remote_callbacks(callbacks);
+        builder.fetch_options(fetch_opts);
+    }
+
+    builder
+        .clone(url, target)
         .with_context(|| format!("Failed to clone {url}"))?;
     tracing::info!("Clone complete: {}", target.display());
     Ok(())

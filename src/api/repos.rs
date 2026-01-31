@@ -202,11 +202,14 @@ async fn clone_and_index(
     update_repo_status(&state, repo_id, RepoStatus::Cloning);
     let url_owned = url.to_string();
     let repo_dir_clone = repo_dir.clone();
+    let git_token = state.config.git_token.clone();
     let timeout = std::time::Duration::from_secs(state.config.clone_timeout_secs);
 
     let clone_result = tokio::time::timeout(
         timeout,
-        tokio::task::spawn_blocking(move || crate::git::clone_repo(&url_owned, &repo_dir_clone)),
+        tokio::task::spawn_blocking(move || {
+            crate::git::clone_repo(&url_owned, &repo_dir_clone, git_token.as_deref())
+        }),
     )
     .await;
 

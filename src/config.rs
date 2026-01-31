@@ -19,6 +19,8 @@ pub struct Config {
     pub max_repo_size_mb: u64,
     /// Maximum total vector entries in memory (0 = unlimited)
     pub max_vector_entries: usize,
+    /// Git personal access token for cloning private repos
+    pub git_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,6 +50,7 @@ impl Default for Config {
             clone_timeout_secs: 300,
             max_repo_size_mb: 500,
             max_vector_entries: 500_000,
+            git_token: None,
         }
     }
 }
@@ -119,6 +122,9 @@ impl Config {
             if let Ok(v) = val.parse() {
                 config.max_vector_entries = v;
             }
+        }
+        if let Ok(token) = std::env::var("REPO_SEARCH_GIT_TOKEN") {
+            config.git_token = Some(token);
         }
 
         config
