@@ -9,6 +9,14 @@ pub struct Config {
     pub bind_addr: String,
     /// LLM provider configuration
     pub llm: LlmConfig,
+    /// Maximum number of repos allowed
+    pub max_repos: usize,
+    /// Maximum concurrent clone operations
+    pub max_concurrent_clones: usize,
+    /// Clone timeout in seconds
+    pub clone_timeout_secs: u64,
+    /// Maximum repo size in MB (checked after clone)
+    pub max_repo_size_mb: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,6 +41,10 @@ impl Default for Config {
             data_dir: PathBuf::from("./data"),
             bind_addr: "127.0.0.1:7000".to_string(),
             llm: LlmConfig::default(),
+            max_repos: 50,
+            max_concurrent_clones: 2,
+            clone_timeout_secs: 300,
+            max_repo_size_mb: 500,
         }
     }
 }
@@ -78,6 +90,26 @@ impl Config {
         if let Ok(dim) = std::env::var("LLM_EMBEDDING_DIM") {
             if let Ok(d) = dim.parse() {
                 config.llm.embedding_dim = d;
+            }
+        }
+        if let Ok(val) = std::env::var("REPO_SEARCH_MAX_REPOS") {
+            if let Ok(v) = val.parse() {
+                config.max_repos = v;
+            }
+        }
+        if let Ok(val) = std::env::var("REPO_SEARCH_MAX_CONCURRENT_CLONES") {
+            if let Ok(v) = val.parse() {
+                config.max_concurrent_clones = v;
+            }
+        }
+        if let Ok(val) = std::env::var("REPO_SEARCH_CLONE_TIMEOUT_SECS") {
+            if let Ok(v) = val.parse() {
+                config.clone_timeout_secs = v;
+            }
+        }
+        if let Ok(val) = std::env::var("REPO_SEARCH_MAX_REPO_SIZE_MB") {
+            if let Ok(v) = val.parse() {
+                config.max_repo_size_mb = v;
             }
         }
 

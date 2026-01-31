@@ -15,6 +15,7 @@ pub struct AppState {
     pub vectors: Arc<VectorStore>,
     pub http_client: reqwest::Client,
     pub llm_config: Arc<RwLock<LlmConfig>>,
+    pub clone_semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 impl AppState {
@@ -36,6 +37,7 @@ impl AppState {
         let vectors = VectorStore::open_or_create(&config.vector_dir())?;
 
         let llm_config = config.llm.clone();
+        let max_concurrent_clones = config.max_concurrent_clones;
 
         Ok(Self {
             config,
@@ -47,6 +49,7 @@ impl AppState {
                 .timeout(std::time::Duration::from_secs(120))
                 .build()?,
             llm_config: Arc::new(RwLock::new(llm_config)),
+            clone_semaphore: Arc::new(tokio::sync::Semaphore::new(max_concurrent_clones)),
         })
     }
 

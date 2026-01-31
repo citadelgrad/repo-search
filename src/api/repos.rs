@@ -31,6 +31,26 @@ pub async fn add_repo(
         ));
     }
 
+    // Reject duplicate URLs and enforce repo limit
+    {
+        let repos = state.repos.read();
+        if repos.iter().any(|r| r.url == url) {
+            return Err((
+                StatusCode::CONFLICT,
+                "A repo with this URL has already been added".to_string(),
+            ));
+        }
+        if repos.len() >= state.config.max_repos {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "Maximum number of repos ({}) reached",
+                    state.config.max_repos
+                ),
+            ));
+        }
+    }
+
     // Derive repo name from URL
     let name = url
         .rsplit('/')
@@ -172,12 +192,67 @@ async fn clone_and_index(
 ) -> anyhow::Result<()> {
     let repo_dir = state.config.repos_dir().join(repo_id.to_string());
 
-    // Clone
+    // Acquire clone permit (limits concurrent clones)
+    let _permit = state
+        .clone_semaphore
+        .acquire()
+        .await
+        .map_err(|_| anyhow::anyhow!("Clone semaphore closed"))?;
+
+    // Clone with timeout
     update_repo_status(&state, repo_id, RepoStatus::Cloning);
     let url_owned = url.to_string();
     let repo_dir_clone = repo_dir.clone();
-    tokio::task::spawn_blocking(move || crate::git::clone_repo(&url_owned, &repo_dir_clone))
-        .await??;
+    let timeout = std::time::Duration::from_secs(state.config.clone_timeout_secs);
+
+    let clone_result = tokio::time::timeout(
+        timeout,
+        tokio::task::spawn_blocking(move || crate::git::clone_repo(&url_owned, &repo_dir_clone)),
+    )
+    .await;
+
+    match clone_result {
+        Ok(Ok(Ok(()))) => {}
+        Ok(Ok(Err(e))) => {
+            set_error_and_cleanup(&state, repo_id, &repo_dir, &format!("Clone failed: {e:#}"));
+            return Err(e);
+        }
+        Ok(Err(e)) => {
+            set_error_and_cleanup(&state, repo_id, &repo_dir, "Clone task failed");
+            anyhow::bail!("Clone task failed: {e}");
+        }
+        Err(_) => {
+            set_error_and_cleanup(
+                &state,
+                repo_id,
+                &repo_dir,
+                &format!(
+                    "Clone timed out after {}s",
+                    state.config.clone_timeout_secs
+                ),
+            );
+            anyhow::bail!("Clone timed out");
+        }
+    }
+
+    // Check repo size limit
+    let max_bytes = state.config.max_repo_size_mb * 1024 * 1024;
+    let size_check_dir = repo_dir.clone();
+    let repo_size =
+        tokio::task::spawn_blocking(move || crate::git::dir_size_bytes(&size_check_dir)).await?;
+    if repo_size > max_bytes {
+        set_error_and_cleanup(
+            &state,
+            repo_id,
+            &repo_dir,
+            &format!(
+                "Repo size ({} MB) exceeds limit ({} MB)",
+                repo_size / (1024 * 1024),
+                state.config.max_repo_size_mb
+            ),
+        );
+        anyhow::bail!("Repo exceeds size limit");
+    }
 
     // Walk files and chunk them
     update_repo_status(&state, repo_id, RepoStatus::Indexing);
@@ -255,6 +330,17 @@ async fn clone_and_index(
 
     tracing::info!("Repo {repo_name} is ready for search");
     Ok(())
+}
+
+fn set_error_and_cleanup(
+    state: &AppState,
+    repo_id: Uuid,
+    repo_dir: &std::path::Path,
+    message: &str,
+) {
+    tracing::error!("{message}");
+    update_repo_status(state, repo_id, RepoStatus::Error(message.to_string()));
+    let _ = std::fs::remove_dir_all(repo_dir);
 }
 
 fn update_repo_status(state: &AppState, repo_id: Uuid, status: RepoStatus) {
