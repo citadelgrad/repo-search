@@ -21,7 +21,7 @@ pub async fn search(
     }
 
     let repo_ids = req.repo_ids.clone();
-    let limit = req.limit;
+    let limit = req.limit.min(200); // Cap at 200 to prevent resource exhaustion
     let fetch_limit = limit * 3; // Fetch more than needed for fusion
 
     // ── Step 1: Query Expansion ──────────────────────────────

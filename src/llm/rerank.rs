@@ -79,7 +79,14 @@ fn truncate_content(content: &str, max_chars: usize) -> String {
     if content.len() <= max_chars {
         content.to_string()
     } else {
-        format!("{}...", &content[..max_chars])
+        // Find a valid UTF-8 char boundary at or before max_chars to avoid panic
+        let boundary = content
+            .char_indices()
+            .take_while(|(i, _)| *i <= max_chars)
+            .last()
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        format!("{}...", &content[..boundary])
     }
 }
 

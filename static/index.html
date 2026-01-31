@@ -802,6 +802,7 @@ async function loadRepos() {
     listDiv.innerHTML = repos.map(r => {
       const statusClass = typeof r.status === 'string' ? r.status : 'error';
       const statusText = typeof r.status === 'string' ? r.status : `error: ${r.status.error}`;
+      const isProcessing = statusText === 'cloning' || statusText === 'indexing';
       return `
         <div class="repo-card">
           <div class="info">
@@ -812,7 +813,7 @@ async function loadRepos() {
               ${r.indexed_at ? ' | Indexed ' + new Date(r.indexed_at).toLocaleDateString() : ''}
             </div>
           </div>
-          <span class="status-badge ${statusClass}">${statusText === 'cloning' || statusText === 'indexing' ? '<span class="spinner"></span>' : ''}${statusText}</span>
+          <span class="status-badge ${esc(statusClass)}">${isProcessing ? '<span class="spinner"></span>' : ''}${esc(statusText)}</span>
           <button class="delete-btn" onclick="deleteRepo('${r.id}')">Delete</button>
         </div>
       `;
@@ -887,7 +888,8 @@ async function loadConfig() {
     document.getElementById('cfg-chat-model').value = cfg.chat_model;
     document.getElementById('cfg-embed-model').value = cfg.embedding_model;
     document.getElementById('cfg-embed-dim').value = cfg.embedding_dim;
-    document.getElementById('cfg-api-key').value = cfg.api_key || '';
+    document.getElementById('cfg-api-key').value = '';
+    document.getElementById('cfg-api-key').placeholder = cfg.has_api_key ? '(key is set - enter new value to change)' : 'sk-...';
   } catch (err) {
     toast('Failed to load config: ' + err.message);
   }

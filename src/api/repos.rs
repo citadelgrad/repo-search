@@ -23,6 +23,14 @@ pub async fn add_repo(
         return Err((StatusCode::BAD_REQUEST, "URL is required".to_string()));
     }
 
+    // Security: only allow https:// and git:// URLs to prevent SSRF and local file access
+    if !url.starts_with("https://") && !url.starts_with("git://") && !url.starts_with("http://") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Only https://, http://, and git:// URLs are allowed".to_string(),
+        ));
+    }
+
     // Derive repo name from URL
     let name = url
         .rsplit('/')
@@ -102,10 +110,28 @@ pub async fn delete_repo(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// GET /api/config - Get current LLM config
-pub async fn get_config(State(state): State<AppState>) -> Json<crate::config::LlmConfig> {
+/// GET /api/config - Get current LLM config (API key redacted)
+pub async fn get_config(State(state): State<AppState>) -> Json<LlmConfigResponse> {
     let config = state.llm_config.read();
-    Json(config.clone())
+    Json(LlmConfigResponse {
+        provider: config.provider.clone(),
+        base_url: config.base_url.clone(),
+        chat_model: config.chat_model.clone(),
+        embedding_model: config.embedding_model.clone(),
+        embedding_dim: config.embedding_dim,
+        has_api_key: config.api_key.is_some(),
+    })
+}
+
+/// Config response with API key redacted
+#[derive(serde::Serialize)]
+pub struct LlmConfigResponse {
+    pub provider: String,
+    pub base_url: String,
+    pub chat_model: String,
+    pub embedding_model: String,
+    pub embedding_dim: usize,
+    pub has_api_key: bool,
 }
 
 /// PUT /api/config - Update LLM config

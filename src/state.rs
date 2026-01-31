@@ -42,7 +42,10 @@ impl AppState {
             repos: Arc::new(RwLock::new(repos)),
             bm25: Arc::new(bm25),
             vectors: Arc::new(vectors),
-            http_client: reqwest::Client::new(),
+            http_client: reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .timeout(std::time::Duration::from_secs(120))
+                .build()?,
             llm_config: Arc::new(RwLock::new(llm_config)),
         })
     }
