@@ -126,6 +126,89 @@
     accent-color: var(--accent);
   }
 
+  /* ── Repo Filter Bar ─────────────────────────── */
+  .repo-filter {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .repo-filter-label {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-right: 4px;
+    white-space: nowrap;
+  }
+
+  .repo-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: 16px;
+    border: 1px solid var(--border);
+    background: var(--bg2);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.15s;
+    user-select: none;
+  }
+
+  .repo-chip:hover {
+    border-color: var(--text-muted);
+    color: var(--text);
+  }
+
+  .repo-chip.selected {
+    background: var(--accent-dim);
+    border-color: var(--accent);
+    color: #fff;
+  }
+
+  .repo-chip .chip-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--text-muted);
+    flex-shrink: 0;
+  }
+
+  .repo-chip.selected .chip-dot {
+    background: var(--green);
+  }
+
+  .repo-chip.status-pending .chip-dot {
+    background: var(--yellow);
+  }
+
+  .repo-filter-actions {
+    display: flex;
+    gap: 4px;
+    margin-left: 4px;
+  }
+
+  .repo-filter-actions button {
+    background: transparent;
+    border: none;
+    color: var(--accent);
+    font-size: 11px;
+    cursor: pointer;
+    padding: 2px 4px;
+  }
+
+  .repo-filter-actions button:hover {
+    text-decoration: underline;
+  }
+
+  .repo-filter-empty {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-style: italic;
+  }
+
   .search-meta {
     font-size: 13px;
     color: var(--text-muted);
@@ -156,8 +239,11 @@
   }
 
   .result-header .repo-name {
-    color: var(--text-muted);
-    font-size: 12px;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-weight: 500;
+    white-space: nowrap;
   }
 
   .result-header .scores {
@@ -403,13 +489,22 @@
   <!-- Search Page -->
   <div class="page active" id="page-search">
     <div class="search-box">
-      <input type="text" id="search-input" placeholder="Search across all indexed repositories..." autofocus>
+      <input type="text" id="search-input" placeholder="Search across repositories..." autofocus>
       <button onclick="doSearch()">Search</button>
     </div>
     <div class="search-options">
       <label><input type="checkbox" id="opt-bm25" checked> BM25 (full-text)</label>
       <label><input type="checkbox" id="opt-vector" checked> Vector (semantic)</label>
       <label><input type="checkbox" id="opt-rerank"> LLM Re-rank + Query Expansion</label>
+    </div>
+
+    <div id="repo-filter" class="repo-filter" style="display:none;">
+      <span class="repo-filter-label">Repos:</span>
+      <div id="repo-chips"></div>
+      <div class="repo-filter-actions">
+        <button onclick="selectAllRepos()">All</button>
+        <button onclick="selectNoRepos()">None</button>
+      </div>
     </div>
 
     <div id="pipeline-status" class="pipeline-info" style="display:none;">
@@ -483,6 +578,25 @@
 <script>
 const API = '';
 
+// ── Repo Filter State ────────────────────────────
+let cachedRepos = [];
+let selectedRepoIds = new Set(); // empty = search all
+
+const REPO_COLORS = [
+  '#58a6ff', '#3fb950', '#d29922', '#f85149', '#bc8cff',
+  '#f78166', '#79c0ff', '#7ee787', '#e3b341', '#ff7b72',
+];
+
+function repoColor(idx) {
+  return REPO_COLORS[idx % REPO_COLORS.length];
+}
+
+function repoColorMap() {
+  const map = {};
+  cachedRepos.forEach((r, i) => { map[r.id] = repoColor(i); });
+  return map;
+}
+
 // ── Navigation ───────────────────────────────────
 document.querySelectorAll('nav button').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -492,8 +606,81 @@ document.querySelectorAll('nav button').forEach(btn => {
     document.getElementById('page-' + btn.dataset.page).classList.add('active');
     if (btn.dataset.page === 'repos') loadRepos();
     if (btn.dataset.page === 'settings') loadConfig();
+    if (btn.dataset.page === 'search') refreshRepoFilter();
   });
 });
+
+// ── Repo Filter ──────────────────────────────────
+async function refreshRepoFilter() {
+  try {
+    const resp = await fetch(API + '/api/repos');
+    cachedRepos = await resp.json();
+  } catch (e) {
+    cachedRepos = [];
+  }
+  renderRepoChips();
+}
+
+function renderRepoChips() {
+  const filterDiv = document.getElementById('repo-filter');
+  const chipsDiv = document.getElementById('repo-chips');
+
+  const readyRepos = cachedRepos.filter(r => r.status === 'ready' || r.status === 'cloning' || r.status === 'indexing');
+
+  if (readyRepos.length === 0) {
+    filterDiv.style.display = 'none';
+    return;
+  }
+
+  filterDiv.style.display = 'flex';
+
+  // Remove any selectedRepoIds that no longer exist
+  const validIds = new Set(readyRepos.map(r => r.id));
+  for (const id of selectedRepoIds) {
+    if (!validIds.has(id)) selectedRepoIds.delete(id);
+  }
+
+  chipsDiv.innerHTML = readyRepos.map((r, i) => {
+    const selected = selectedRepoIds.has(r.id);
+    const isPending = r.status === 'cloning' || r.status === 'indexing';
+    const color = repoColor(i);
+    return `<span class="repo-chip ${selected ? 'selected' : ''} ${isPending ? 'status-pending' : ''}"
+                  data-id="${r.id}"
+                  onclick="toggleRepoChip('${r.id}')"
+                  style="${selected ? 'border-color:' + color + '; background:' + color + '22;' : ''}"
+                  title="${esc(r.url)}${isPending ? ' (still indexing)' : ''}">
+      <span class="chip-dot" style="background:${color}"></span>
+      ${esc(r.name)}
+    </span>`;
+  }).join('');
+}
+
+function toggleRepoChip(id) {
+  if (selectedRepoIds.has(id)) {
+    selectedRepoIds.delete(id);
+  } else {
+    selectedRepoIds.add(id);
+  }
+  renderRepoChips();
+}
+
+function selectAllRepos() {
+  cachedRepos.forEach(r => {
+    if (r.status === 'ready') selectedRepoIds.add(r.id);
+  });
+  renderRepoChips();
+}
+
+function selectNoRepos() {
+  selectedRepoIds.clear();
+  renderRepoChips();
+}
+
+function getSelectedRepoIds() {
+  // Empty selection means "search all"
+  if (selectedRepoIds.size === 0) return null;
+  return Array.from(selectedRepoIds);
+}
 
 // ── Search ───────────────────────────────────────
 document.getElementById('search-input').addEventListener('keydown', e => {
@@ -540,6 +727,7 @@ async function doSearch() {
         use_bm25: useBm25,
         use_vector: useVector,
         use_rerank: useRerank,
+        repo_ids: getSelectedRepoIds(),
       }),
     });
 
@@ -568,10 +756,13 @@ async function doSearch() {
       return;
     }
 
-    resultsDiv.innerHTML = data.results.map(r => `
+    const colors = repoColorMap();
+    resultsDiv.innerHTML = data.results.map(r => {
+      const c = colors[r.repo_id] || 'var(--text-muted)';
+      return `
       <div class="result">
         <div class="result-header">
-          <span class="repo-name">${esc(r.repo_name)}</span>
+          <span class="repo-name" style="background:${c}22; color:${c}; border:1px solid ${c}44;">${esc(r.repo_name)}</span>
           <span class="file-path">${esc(r.file_path)}</span>
           <span class="lines">L${r.start_line}-${r.end_line}</span>
           <div class="scores">
@@ -582,8 +773,8 @@ async function doSearch() {
           </div>
         </div>
         <pre>${esc(r.content)}</pre>
-      </div>
-    `).join('');
+      </div>`;
+    }).join('');
 
   } catch (err) {
     resultsDiv.innerHTML = `<p style="color:var(--red)">Search failed: ${esc(err.message)}</p>`;
@@ -660,10 +851,11 @@ async function addRepo() {
     input.value = '';
     toast('Repository added - cloning and indexing in background');
     loadRepos();
+    refreshRepoFilter();
 
     // Start polling
     if (!repoPolling) {
-      repoPolling = setInterval(loadRepos, 3000);
+      repoPolling = setInterval(() => { loadRepos(); refreshRepoFilter(); }, 3000);
     }
   } catch (err) {
     toast('Failed to add repo: ' + err.message);
@@ -675,8 +867,10 @@ async function deleteRepo(id) {
 
   try {
     await fetch(API + `/api/repos/${id}`, { method: 'DELETE' });
+    selectedRepoIds.delete(id);
     toast('Repository deleted');
     loadRepos();
+    refreshRepoFilter();
   } catch (err) {
     toast('Failed to delete: ' + err.message);
   }
@@ -741,6 +935,7 @@ function toast(msg) {
 
 // Initial load
 loadRepos();
+refreshRepoFilter();
 </script>
 </body>
 </html>
