@@ -158,7 +158,9 @@ impl VectorStore {
     }
 }
 
-fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+/// Compute cosine similarity between two vectors.
+/// Returns 0.0 for mismatched lengths, empty vectors, or zero-norm vectors.
+pub(crate) fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     if a.len() != b.len() || a.is_empty() {
         return 0.0;
     }
@@ -178,5 +180,229 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
         0.0
     } else {
         dot / denom
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    // ── cosine_similarity tests ──────────────────────────
+
+    #[test]
+    fn test_cosine_identical_vectors() {
+        let a = vec![1.0, 2.0, 3.0];
+        let score = cosine_similarity(&a, &a);
+        assert!((score - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_cosine_orthogonal_vectors() {
+        let a = vec![1.0, 0.0, 0.0];
+        let b = vec![0.0, 1.0, 0.0];
+        let score = cosine_similarity(&a, &b);
+        assert!(score.abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_cosine_opposite_vectors() {
+        let a = vec![1.0, 2.0, 3.0];
+        let b = vec![-1.0, -2.0, -3.0];
+        let score = cosine_similarity(&a, &b);
+        assert!((score - (-1.0)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_cosine_empty_vectors() {
+        assert_eq!(cosine_similarity(&[], &[]), 0.0);
+    }
+
+    #[test]
+    fn test_cosine_mismatched_lengths() {
+        let a = vec![1.0, 2.0];
+        let b = vec![1.0, 2.0, 3.0];
+        assert_eq!(cosine_similarity(&a, &b), 0.0);
+    }
+
+    #[test]
+    fn test_cosine_zero_vector() {
+        let a = vec![0.0, 0.0, 0.0];
+        let b = vec![1.0, 2.0, 3.0];
+        assert_eq!(cosine_similarity(&a, &b), 0.0);
+    }
+
+    #[test]
+    fn test_cosine_known_value() {
+        // cos([1,0], [1,1]) = 1 / (1 * sqrt(2)) = 0.7071...
+        let a = vec![1.0, 0.0];
+        let b = vec![1.0, 1.0];
+        let score = cosine_similarity(&a, &b);
+        assert!((score - std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-6);
+    }
+
+    // ── VectorStore tests ────────────────────────────────
+
+    fn make_chunks(n: usize) -> Vec<(String, usize, String, String, usize, usize)> {
+        (0..n)
+            .map(|i| {
+                (
+                    format!("file_{i}.rs"),
+                    i,
+                    format!("fn func_{i}() {{}}"),
+                    "rust".to_string(),
+                    i * 100 + 1,
+                    (i + 1) * 100,
+                )
+            })
+            .collect()
+    }
+
+    fn make_embeddings(n: usize, dim: usize) -> Vec<Vec<f32>> {
+        (0..n)
+            .map(|i| {
+                let mut v = vec![0.0f32; dim];
+                // Each embedding differs in direction
+                v[i % dim] = 1.0;
+                v
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_vector_store_create_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = VectorStore::open_or_create(dir.path()).unwrap();
+        assert_eq!(store.entry_count(), 0);
+    }
+
+    #[test]
+    fn test_vector_store_add_and_search() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = VectorStore::open_or_create(dir.path()).unwrap();
+        let repo_id = Uuid::new_v4();
+
+        let chunks = make_chunks(3);
+        let embeddings = vec![
+            vec![1.0, 0.0, 0.0],
+            vec![0.0, 1.0, 0.0],
+            vec![0.0, 0.0, 1.0],
+        ];
+
+        store
+            .add_chunks(repo_id, "test-repo", &chunks, embeddings)
+            .unwrap();
+        assert_eq!(store.entry_count(), 3);
+
+        // Search for vector closest to [1, 0, 0]
+        let results = store.search(&[1.0, 0.0, 0.0], 10, None);
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].file_path, "file_0.rs");
+        assert!((results[0].score - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_vector_store_search_with_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = VectorStore::open_or_create(dir.path()).unwrap();
+        let repo_id = Uuid::new_v4();
+
+        let chunks = make_chunks(5);
+        let embeddings = make_embeddings(5, 5);
+
+        store
+            .add_chunks(repo_id, "test-repo", &chunks, embeddings)
+            .unwrap();
+
+        let results = store.search(&[1.0, 0.0, 0.0, 0.0, 0.0], 2, None);
+        assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn test_vector_store_delete_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = VectorStore::open_or_create(dir.path()).unwrap();
+        let repo1 = Uuid::new_v4();
+        let repo2 = Uuid::new_v4();
+
+        store
+            .add_chunks(
+                repo1,
+                "repo1",
+                &make_chunks(2),
+                vec![vec![1.0, 0.0], vec![0.0, 1.0]],
+            )
+            .unwrap();
+        store
+            .add_chunks(
+                repo2,
+                "repo2",
+                &make_chunks(2),
+                vec![vec![0.5, 0.5], vec![0.3, 0.7]],
+            )
+            .unwrap();
+
+        assert_eq!(store.entry_count(), 4);
+        store.delete_repo(&repo1).unwrap();
+        assert_eq!(store.entry_count(), 2);
+
+        let counts = store.repo_counts();
+        assert!(!counts.contains_key(&repo1));
+        assert_eq!(*counts.get(&repo2).unwrap(), 2);
+    }
+
+    #[test]
+    fn test_vector_store_filter_by_repo_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = VectorStore::open_or_create(dir.path()).unwrap();
+        let repo1 = Uuid::new_v4();
+        let repo2 = Uuid::new_v4();
+
+        store
+            .add_chunks(
+                repo1,
+                "repo1",
+                &make_chunks(1),
+                vec![vec![1.0, 0.0, 0.0]],
+            )
+            .unwrap();
+        store
+            .add_chunks(
+                repo2,
+                "repo2",
+                &make_chunks(1),
+                vec![vec![0.9, 0.1, 0.0]],
+            )
+            .unwrap();
+
+        let results = store.search(&[1.0, 0.0, 0.0], 10, Some(&[repo2]));
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].repo_name, "repo2");
+    }
+
+    #[test]
+    fn test_vector_store_persistence() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo_id = Uuid::new_v4();
+
+        // Write
+        {
+            let store = VectorStore::open_or_create(dir.path()).unwrap();
+            store
+                .add_chunks(
+                    repo_id,
+                    "persisted",
+                    &make_chunks(2),
+                    vec![vec![1.0, 0.0], vec![0.0, 1.0]],
+                )
+                .unwrap();
+        }
+
+        // Re-open and verify
+        let store = VectorStore::open_or_create(dir.path()).unwrap();
+        assert_eq!(store.entry_count(), 2);
+
+        let results = store.search(&[1.0, 0.0], 10, None);
+        assert_eq!(results.len(), 2);
     }
 }

@@ -224,3 +224,207 @@ impl Bm25Index {
         Ok(hits)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::FileChunk;
+    use uuid::Uuid;
+
+    fn make_chunk(repo_id: Uuid, path: &str, idx: usize, content: &str) -> FileChunk {
+        FileChunk {
+            repo_id,
+            file_path: path.to_string(),
+            chunk_index: idx,
+            content: content.to_string(),
+            language: "rust".to_string(),
+            start_line: 1,
+            end_line: 10,
+        }
+    }
+
+    #[test]
+    fn test_create_fresh_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = Bm25Index::open_or_create(dir.path()).unwrap();
+        let results = index.search("anything", 10, None).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_index_and_search_basic() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = Bm25Index::open_or_create(dir.path()).unwrap();
+        let repo_id = Uuid::new_v4();
+
+        let chunks = vec![
+            make_chunk(
+                repo_id,
+                "src/main.rs",
+                0,
+                "fn main() { println!(\"hello world\"); }",
+            ),
+            make_chunk(
+                repo_id,
+                "src/lib.rs",
+                0,
+                "pub fn add(a: i32, b: i32) -> i32 { a + b }",
+            ),
+            make_chunk(
+                repo_id,
+                "README.md",
+                0,
+                "This is a documentation file about the project",
+            ),
+        ];
+
+        index.index_chunks("test-repo", &chunks).unwrap();
+
+        let results = index.search("main", 10, None).unwrap();
+        assert!(!results.is_empty());
+        assert!(results.iter().any(|r| r.file_path == "src/main.rs"));
+    }
+
+    #[test]
+    fn test_search_respects_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = Bm25Index::open_or_create(dir.path()).unwrap();
+        let repo_id = Uuid::new_v4();
+
+        let chunks: Vec<_> = (0..20)
+            .map(|i| {
+                make_chunk(
+                    repo_id,
+                    &format!("file_{i}.rs"),
+                    i,
+                    &format!("function number {i} with common keyword"),
+                )
+            })
+            .collect();
+
+        index.index_chunks("test-repo", &chunks).unwrap();
+
+        let results = index
+            .search("function common keyword", 5, None)
+            .unwrap();
+        assert!(results.len() <= 5);
+    }
+
+    #[test]
+    fn test_search_returns_stored_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = Bm25Index::open_or_create(dir.path()).unwrap();
+        let repo_id = Uuid::new_v4();
+
+        let chunks = vec![make_chunk(
+            repo_id,
+            "src/handler.rs",
+            3,
+            "async fn handle_request(req: Request) -> Response { todo!() }",
+        )];
+        index.index_chunks("my-repo", &chunks).unwrap();
+
+        let results = index.search("handle request", 10, None).unwrap();
+        assert!(!results.is_empty());
+        let hit = &results[0];
+        assert_eq!(hit.repo_id, repo_id);
+        assert_eq!(hit.repo_name, "my-repo");
+        assert_eq!(hit.file_path, "src/handler.rs");
+        assert_eq!(hit.chunk_index, 3);
+        assert_eq!(hit.language, "rust");
+        assert!(hit.score > 0.0);
+    }
+
+    #[test]
+    fn test_delete_repo_removes_documents() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = Bm25Index::open_or_create(dir.path()).unwrap();
+        let repo1 = Uuid::new_v4();
+        let repo2 = Uuid::new_v4();
+
+        index
+            .index_chunks(
+                "repo1",
+                &[make_chunk(repo1, "a.rs", 0, "unique_token_alpha function")],
+            )
+            .unwrap();
+        index
+            .index_chunks(
+                "repo2",
+                &[make_chunk(repo2, "b.rs", 0, "unique_token_beta function")],
+            )
+            .unwrap();
+
+        assert!(!index
+            .search("unique_token_alpha", 10, None)
+            .unwrap()
+            .is_empty());
+        assert!(!index
+            .search("unique_token_beta", 10, None)
+            .unwrap()
+            .is_empty());
+
+        index.delete_repo(&repo1).unwrap();
+
+        assert!(index
+            .search("unique_token_alpha", 10, None)
+            .unwrap()
+            .is_empty());
+        assert!(!index
+            .search("unique_token_beta", 10, None)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn test_search_filter_by_repo_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = Bm25Index::open_or_create(dir.path()).unwrap();
+        let repo1 = Uuid::new_v4();
+        let repo2 = Uuid::new_v4();
+
+        index
+            .index_chunks(
+                "repo1",
+                &[make_chunk(repo1, "a.rs", 0, "shared search term code")],
+            )
+            .unwrap();
+        index
+            .index_chunks(
+                "repo2",
+                &[make_chunk(repo2, "b.rs", 0, "shared search term code")],
+            )
+            .unwrap();
+
+        let results = index
+            .search("shared search term", 10, Some(&[repo2]))
+            .unwrap();
+        assert!(!results.is_empty());
+        assert!(results.iter().all(|r| r.repo_id == repo2));
+    }
+
+    #[test]
+    fn test_reopen_existing_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo_id = Uuid::new_v4();
+
+        {
+            let index = Bm25Index::open_or_create(dir.path()).unwrap();
+            index
+                .index_chunks(
+                    "repo",
+                    &[make_chunk(
+                        repo_id,
+                        "persisted.rs",
+                        0,
+                        "persistence test data content",
+                    )],
+                )
+                .unwrap();
+        }
+
+        let index = Bm25Index::open_or_create(dir.path()).unwrap();
+        let results = index.search("persistence test", 10, None).unwrap();
+        assert!(!results.is_empty());
+    }
+}

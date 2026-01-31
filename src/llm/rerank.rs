@@ -293,3 +293,178 @@ async fn call_openai_single(
         .map(|c| c.message.content.clone())
         .unwrap_or_default())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::SearchHit;
+    use uuid::Uuid;
+
+    // ── parse_relevance_score tests ─────────────────────
+
+    #[test]
+    fn test_parse_perfect_json_relevant() {
+        let content = r#"{"relevant": true, "confidence": 0.9}"#;
+        let score = parse_relevance_score(content).unwrap();
+        // base=0.5 + 0.9*0.5 = 0.95
+        assert!((score - 0.95).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_parse_perfect_json_not_relevant() {
+        let content = r#"{"relevant": false, "confidence": 0.8}"#;
+        let score = parse_relevance_score(content).unwrap();
+        // base=0.0 + 0.8*0.5 = 0.4
+        assert!((score - 0.4).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_parse_json_without_confidence() {
+        let content = r#"{"relevant": true}"#;
+        let score = parse_relevance_score(content).unwrap();
+        // base=0.5 + default(0.5)*0.5 = 0.75
+        assert!((score - 0.75).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_parse_json_embedded_in_markdown() {
+        let content = "Here is my judgment:\n```json\n{\"relevant\": true, \"confidence\": 1.0}\n```";
+        let score = parse_relevance_score(content).unwrap();
+        assert!((score - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_parse_yes_keyword_fallback() {
+        let content = "Yes, this code is relevant to the search query.";
+        let score = parse_relevance_score(content).unwrap();
+        assert!((score - 0.7).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_parse_no_keyword_fallback() {
+        let content = "No, this is not related.";
+        let score = parse_relevance_score(content).unwrap();
+        assert!((score - 0.2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_parse_uncertain_fallback() {
+        let content = "I'm unable to determine relevance from this.";
+        let score = parse_relevance_score(content).unwrap();
+        assert!((score - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_parse_relevant_true_string_fallback() {
+        let content = "The answer is \"relevant\": true based on analysis";
+        let score = parse_relevance_score(content).unwrap();
+        assert!((score - 0.7).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_parse_relevant_false_string_fallback() {
+        let content = "My judgment: \"relevant\": false";
+        let score = parse_relevance_score(content).unwrap();
+        assert!((score - 0.2).abs() < 1e-6);
+    }
+
+    // ── build_yesno_prompt tests ────────────────────────
+
+    #[test]
+    fn test_build_yesno_prompt_contains_query() {
+        let prompt = build_yesno_prompt("search term", "main.rs", "fn main() {}");
+        assert!(prompt.contains("search term"));
+        assert!(prompt.contains("main.rs"));
+        assert!(prompt.contains("fn main()"));
+    }
+
+    #[test]
+    fn test_build_yesno_prompt_structure() {
+        let prompt = build_yesno_prompt("test", "f.rs", "code");
+        assert!(prompt.contains("<|im_start|>system"));
+        assert!(prompt.contains("<|im_start|>user"));
+        assert!(prompt.contains("<|im_start|>assistant"));
+    }
+
+    // ── truncate_content tests ──────────────────────────
+
+    #[test]
+    fn test_truncate_short_content() {
+        let result = truncate_content("short", 100);
+        assert_eq!(result, "short");
+    }
+
+    #[test]
+    fn test_truncate_long_content() {
+        let content = "a".repeat(200);
+        let result = truncate_content(&content, 50);
+        assert_eq!(result.len(), 53); // 50 chars + "..."
+        assert!(result.ends_with("..."));
+    }
+
+    #[test]
+    fn test_truncate_exact_boundary() {
+        let content = "a".repeat(100);
+        let result = truncate_content(&content, 100);
+        assert_eq!(result, content); // No truncation needed
+    }
+
+    // ── position-aware blending tests ───────────────────
+
+    fn make_hit(combined: f32) -> SearchHit {
+        SearchHit {
+            repo_id: Uuid::new_v4(),
+            repo_name: "r".to_string(),
+            file_path: "f.rs".to_string(),
+            chunk_index: 0,
+            content: "c".to_string(),
+            language: "rust".to_string(),
+            start_line: 1,
+            end_line: 10,
+            bm25_score: 0.0,
+            vector_score: 0.0,
+            combined_score: combined,
+            rerank_score: None,
+        }
+    }
+
+    #[test]
+    fn test_position_aware_blending_top3() {
+        // Positions 0-2 get 75% RRF + 25% rerank
+        let mut hits: Vec<SearchHit> = (0..3).map(|_| make_hit(1.0)).collect();
+
+        // Simulate setting rerank scores directly (bypassing LLM)
+        for (_i, hit) in hits.iter_mut().enumerate() {
+            hit.rerank_score = Some(0.5);
+            let (rrf_w, rerank_w) = (0.75, 0.25);
+            hit.combined_score = rrf_w * hit.combined_score + rerank_w * 0.5;
+        }
+
+        // Top 3: 0.75 * 1.0 + 0.25 * 0.5 = 0.875
+        for hit in &hits {
+            assert!((hit.combined_score - 0.875).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn test_position_aware_blending_mid_range() {
+        // Positions 3-9 get 60% RRF + 40% rerank
+        let mut hit = make_hit(1.0);
+        hit.rerank_score = Some(0.5);
+        let (rrf_w, rerank_w) = (0.60, 0.40);
+        hit.combined_score = rrf_w * hit.combined_score + rerank_w * 0.5;
+        // 0.60 * 1.0 + 0.40 * 0.5 = 0.8
+        assert!((hit.combined_score - 0.8).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_position_aware_blending_tail() {
+        // Positions 10+ get 40% RRF + 60% rerank
+        let mut hit = make_hit(1.0);
+        hit.rerank_score = Some(0.5);
+        let (rrf_w, rerank_w) = (0.40, 0.60);
+        hit.combined_score = rrf_w * hit.combined_score + rerank_w * 0.5;
+        // 0.40 * 1.0 + 0.60 * 0.5 = 0.7
+        assert!((hit.combined_score - 0.7).abs() < 1e-6);
+    }
+}

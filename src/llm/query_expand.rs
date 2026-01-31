@@ -169,3 +169,77 @@ async fn call_openai(
         .map(|c| c.message.content.clone())
         .unwrap_or_default())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_clean_json_array() {
+        let input = r#"["authentication middleware", "auth handler function"]"#;
+        let result = parse_expanded_queries(input).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], "authentication middleware");
+        assert_eq!(result[1], "auth handler function");
+    }
+
+    #[test]
+    fn test_parse_json_embedded_in_text() {
+        let input = "Here are 2 alternatives:\n[\"error handling\", \"exception management\"]\nHope that helps!";
+        let result = parse_expanded_queries(input).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], "error handling");
+        assert_eq!(result[1], "exception management");
+    }
+
+    #[test]
+    fn test_parse_json_in_markdown_code_block() {
+        let input = "```json\n[\"database query\", \"SQL statement\"]\n```";
+        let result = parse_expanded_queries(input).unwrap();
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_truncates_to_two() {
+        let input = r#"["a", "b", "c", "d"]"#;
+        let result = parse_expanded_queries(input).unwrap();
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_single_item() {
+        let input = r#"["only one"]"#;
+        let result = parse_expanded_queries(input).unwrap();
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_empty_array() {
+        let input = "[]";
+        let result = parse_expanded_queries(input).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_parse_garbage_returns_empty() {
+        let input = "I don't understand the question.";
+        let result = parse_expanded_queries(input).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_parse_no_closing_bracket() {
+        // Only opening bracket, no closing - should fallback gracefully
+        let input = "[\"partial";
+        let result = parse_expanded_queries(input).unwrap();
+        assert!(result.is_empty()); // parse fails gracefully
+    }
+
+    #[test]
+    fn test_parse_unicode_queries() {
+        let input = r#"["函数定义", "関数の実装"]"#;
+        let result = parse_expanded_queries(input).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], "函数定义");
+    }
+}

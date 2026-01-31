@@ -1382,6 +1382,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tantivy",
+ "tempfile",
  "thiserror",
  "tokio",
  "tower-http 0.5.2",

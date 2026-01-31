@@ -1,11 +1,3 @@
-mod api;
-mod config;
-mod git;
-mod llm;
-mod models;
-mod search;
-mod state;
-
 use axum::http::header;
 use axum::response::Html;
 use axum::routing::{delete, get, post, put};
@@ -13,8 +5,9 @@ use axum::Router;
 use tower_http::cors::{Any, CorsLayer};
 use tracing_subscriber::EnvFilter;
 
-use crate::config::Config;
-use crate::state::AppState;
+use repo_search::api;
+use repo_search::config::Config;
+use repo_search::state::AppState;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

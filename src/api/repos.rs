@@ -281,3 +281,108 @@ fn chunk_file(
 
     chunks
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    fn lines_str(n: usize) -> String {
+        (1..=n).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n")
+    }
+
+    #[test]
+    fn test_chunk_empty_file() {
+        let id = Uuid::new_v4();
+        let chunks = chunk_file(id, "empty.rs", "", "rust");
+        assert!(chunks.is_empty());
+    }
+
+    #[test]
+    fn test_chunk_small_file_single_chunk() {
+        let id = Uuid::new_v4();
+        let content = lines_str(50);
+        let chunks = chunk_file(id, "small.rs", &content, "rust");
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].repo_id, id);
+        assert_eq!(chunks[0].file_path, "small.rs");
+        assert_eq!(chunks[0].chunk_index, 0);
+        assert_eq!(chunks[0].language, "rust");
+        assert_eq!(chunks[0].start_line, 1);
+        assert_eq!(chunks[0].end_line, 50);
+    }
+
+    #[test]
+    fn test_chunk_exactly_100_lines() {
+        let id = Uuid::new_v4();
+        let content = lines_str(100);
+        let chunks = chunk_file(id, "exact.rs", &content, "rust");
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].start_line, 1);
+        assert_eq!(chunks[0].end_line, 100);
+    }
+
+    #[test]
+    fn test_chunk_101_lines_creates_overlap() {
+        let id = Uuid::new_v4();
+        let content = lines_str(101);
+        let chunks = chunk_file(id, "overlap.rs", &content, "rust");
+        assert_eq!(chunks.len(), 2);
+
+        // First chunk: lines 1-100
+        assert_eq!(chunks[0].start_line, 1);
+        assert_eq!(chunks[0].end_line, 100);
+        assert_eq!(chunks[0].chunk_index, 0);
+
+        // Second chunk starts at 81 (100 - 20 overlap + 1)
+        assert_eq!(chunks[1].start_line, 81);
+        assert_eq!(chunks[1].end_line, 101);
+        assert_eq!(chunks[1].chunk_index, 1);
+    }
+
+    #[test]
+    fn test_chunk_large_file_multiple_chunks() {
+        let id = Uuid::new_v4();
+        let content = lines_str(350);
+        let chunks = chunk_file(id, "large.rs", &content, "rust");
+
+        // 350 lines with chunk_size=100, overlap=20, stride=80:
+        // chunk 0: 1-100, chunk 1: 81-180, chunk 2: 161-260, chunk 3: 241-340, chunk 4: 321-350
+        assert!(chunks.len() >= 4);
+
+        // Verify sequential chunk indices
+        for (i, chunk) in chunks.iter().enumerate() {
+            assert_eq!(chunk.chunk_index, i);
+        }
+
+        // Verify last chunk covers the end
+        let last = chunks.last().unwrap();
+        assert_eq!(last.end_line, 350);
+    }
+
+    #[test]
+    fn test_chunk_content_integrity() {
+        let id = Uuid::new_v4();
+        let content = "fn main() {\n    println!(\"hello\");\n}";
+        let chunks = chunk_file(id, "main.rs", content, "rust");
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].content, content);
+    }
+
+    #[test]
+    fn test_chunk_overlap_contains_shared_lines() {
+        let id = Uuid::new_v4();
+        let content = lines_str(120);
+        let chunks = chunk_file(id, "overlap.rs", &content, "rust");
+        assert_eq!(chunks.len(), 2);
+
+        // Lines 81-100 should appear in both chunks
+        let c0_lines: Vec<&str> = chunks[0].content.lines().collect();
+        let c1_lines: Vec<&str> = chunks[1].content.lines().collect();
+
+        // Last 20 lines of chunk 0 should match first 20 lines of chunk 1
+        let c0_tail = &c0_lines[80..100];
+        let c1_head = &c1_lines[0..20];
+        assert_eq!(c0_tail, c1_head);
+    }
+}

@@ -107,3 +107,223 @@ pub fn multi_query_rrf_fusion(
     results.truncate(limit);
     results
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::search::bm25::Bm25Hit;
+    use crate::search::vector::VectorHit;
+    use uuid::Uuid;
+
+    fn make_bm25_hit(id: Uuid, path: &str, chunk: usize, score: f32) -> Bm25Hit {
+        Bm25Hit {
+            repo_id: id,
+            repo_name: "test-repo".to_string(),
+            file_path: path.to_string(),
+            chunk_index: chunk,
+            content: format!("content of {path} chunk {chunk}"),
+            language: "rust".to_string(),
+            start_line: 1,
+            end_line: 100,
+            score,
+        }
+    }
+
+    fn make_vector_hit(id: Uuid, path: &str, chunk: usize, score: f32) -> VectorHit {
+        VectorHit {
+            repo_id: id,
+            repo_name: "test-repo".to_string(),
+            file_path: path.to_string(),
+            chunk_index: chunk,
+            content: format!("content of {path} chunk {chunk}"),
+            language: "rust".to_string(),
+            start_line: 1,
+            end_line: 100,
+            score,
+        }
+    }
+
+    #[test]
+    fn test_empty_inputs() {
+        let results = multi_query_rrf_fusion(&[], 10);
+        assert!(results.is_empty());
+
+        let qr = QueryResults {
+            bm25_hits: vec![],
+            vector_hits: vec![],
+            weight: 1.0,
+        };
+        let results = multi_query_rrf_fusion(&[qr], 10);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_bm25_only_single_query() {
+        let id = Uuid::new_v4();
+        let qr = QueryResults {
+            bm25_hits: vec![
+                make_bm25_hit(id, "src/main.rs", 0, 5.0),
+                make_bm25_hit(id, "src/lib.rs", 0, 3.0),
+            ],
+            vector_hits: vec![],
+            weight: 2.0,
+        };
+
+        let results = multi_query_rrf_fusion(&[qr], 10);
+        assert_eq!(results.len(), 2);
+        // Rank 0 gets higher RRF score
+        assert!(results[0].combined_score > results[1].combined_score);
+        assert_eq!(results[0].file_path, "src/main.rs");
+    }
+
+    #[test]
+    fn test_vector_only_single_query() {
+        let id = Uuid::new_v4();
+        let qr = QueryResults {
+            bm25_hits: vec![],
+            vector_hits: vec![
+                make_vector_hit(id, "src/a.rs", 0, 0.95),
+                make_vector_hit(id, "src/b.rs", 0, 0.80),
+            ],
+            weight: 1.0,
+        };
+
+        let results = multi_query_rrf_fusion(&[qr], 10);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].file_path, "src/a.rs");
+        assert!(results[0].vector_score > results[1].vector_score);
+    }
+
+    #[test]
+    fn test_combined_bm25_and_vector_boost() {
+        let id = Uuid::new_v4();
+        // File A: rank 0 in BM25, rank 1 in vector
+        // File B: rank 1 in BM25, rank 0 in vector
+        // File C: only in BM25 at rank 2
+        let qr = QueryResults {
+            bm25_hits: vec![
+                make_bm25_hit(id, "a.rs", 0, 5.0),
+                make_bm25_hit(id, "b.rs", 0, 3.0),
+                make_bm25_hit(id, "c.rs", 0, 1.0),
+            ],
+            vector_hits: vec![
+                make_vector_hit(id, "b.rs", 0, 0.95),
+                make_vector_hit(id, "a.rs", 0, 0.80),
+            ],
+            weight: 1.0,
+        };
+
+        let results = multi_query_rrf_fusion(&[qr], 10);
+        assert_eq!(results.len(), 3);
+        // a.rs and b.rs should be top 2 (both appear in BM25 + vector)
+        let top_paths: Vec<&str> = results.iter().take(2).map(|r| r.file_path.as_str()).collect();
+        assert!(top_paths.contains(&"a.rs"));
+        assert!(top_paths.contains(&"b.rs"));
+        // c.rs should be last (only in BM25)
+        assert_eq!(results[2].file_path, "c.rs");
+    }
+
+    #[test]
+    fn test_original_query_weighted_higher() {
+        let id = Uuid::new_v4();
+        // Original query (weight 2.0) finds file A
+        let original = QueryResults {
+            bm25_hits: vec![make_bm25_hit(id, "a.rs", 0, 5.0)],
+            vector_hits: vec![],
+            weight: 2.0,
+        };
+        // Expanded query (weight 1.0) finds file B
+        let expanded = QueryResults {
+            bm25_hits: vec![make_bm25_hit(id, "b.rs", 0, 5.0)],
+            vector_hits: vec![],
+            weight: 1.0,
+        };
+
+        let results = multi_query_rrf_fusion(&[original, expanded], 10);
+        assert_eq!(results.len(), 2);
+        // a.rs should rank higher because of 2x weight
+        assert_eq!(results[0].file_path, "a.rs");
+        assert!(results[0].combined_score > results[1].combined_score);
+    }
+
+    #[test]
+    fn test_top_rank_bonus_applied() {
+        let id = Uuid::new_v4();
+        let qr = QueryResults {
+            bm25_hits: vec![
+                make_bm25_hit(id, "first.rs", 0, 10.0),
+                make_bm25_hit(id, "second.rs", 0, 9.0),
+            ],
+            vector_hits: vec![],
+            weight: 1.0,
+        };
+
+        let results = multi_query_rrf_fusion(&[qr], 10);
+        // first.rs is rank 0 so gets top_rank_bonus (+0.05)
+        let first = &results[0];
+        let k = 60.0f32;
+        let expected_rrf = 1.0 / (k + 1.0); // rank 0
+        let expected_with_bonus = expected_rrf + 0.05;
+        assert!((first.combined_score - expected_with_bonus).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_limit_respected() {
+        let id = Uuid::new_v4();
+        let bm25_hits: Vec<_> = (0..50)
+            .map(|i| make_bm25_hit(id, &format!("file_{i}.rs"), 0, 50.0 - i as f32))
+            .collect();
+
+        let qr = QueryResults {
+            bm25_hits,
+            vector_hits: vec![],
+            weight: 1.0,
+        };
+
+        let results = multi_query_rrf_fusion(&[qr], 5);
+        assert_eq!(results.len(), 5);
+    }
+
+    #[test]
+    fn test_multi_query_fusion_deduplication() {
+        let id = Uuid::new_v4();
+        // Same file appears in multiple query variants
+        let q1 = QueryResults {
+            bm25_hits: vec![make_bm25_hit(id, "common.rs", 0, 5.0)],
+            vector_hits: vec![],
+            weight: 2.0,
+        };
+        let q2 = QueryResults {
+            bm25_hits: vec![make_bm25_hit(id, "common.rs", 0, 4.0)],
+            vector_hits: vec![],
+            weight: 1.0,
+        };
+
+        let results = multi_query_rrf_fusion(&[q1, q2], 10);
+        // Should be deduplicated to 1 entry with accumulated score
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].file_path, "common.rs");
+        // Score should be sum of both queries' RRF + top_rank_bonus
+        let k = 60.0f32;
+        let expected = 2.0 * (1.0 / (k + 1.0)) + 1.0 * (1.0 / (k + 1.0)) + 0.05;
+        assert!((results[0].combined_score - expected).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_bm25_score_keeps_max() {
+        let id = Uuid::new_v4();
+        let q1 = QueryResults {
+            bm25_hits: vec![make_bm25_hit(id, "a.rs", 0, 8.0)],
+            vector_hits: vec![],
+            weight: 1.0,
+        };
+        let q2 = QueryResults {
+            bm25_hits: vec![make_bm25_hit(id, "a.rs", 0, 3.0)],
+            vector_hits: vec![],
+            weight: 1.0,
+        };
+
+        let results = multi_query_rrf_fusion(&[q1, q2], 10);
+        assert_eq!(results[0].bm25_score, 8.0); // max, not overwritten
+    }
+}

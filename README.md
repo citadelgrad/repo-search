@@ -2,47 +2,163 @@
 
 A Rust web app for cloning git repositories and searching them with a hybrid pipeline combining **BM25 full-text search**, **vector semantic search**, and **LLM re-ranking**.
 
-## Search Pipeline
+## Search Pipeline DAG
 
 ```
-                         User Query
-                             |
-               +-------------+-------------+
-               v                           v
-        Query Expansion              Original Query
-        (LLM: 2 variants)             (x2 weight)
-               |                           |
-               +-------------+-------------+
-                             |
-          +------------------+------------------+
-          v                  v                  v
-     Original Q         Expanded Q1        Expanded Q2
-     BM25 + Vector      BM25 + Vector      BM25 + Vector
-          |                  |                  |
-          +------------------+------------------+
-                             |
-                    RRF Fusion + Bonus
-                    (original x2, top-rank +0.05)
-                    Keep top 30
-                             |
-                    LLM Re-ranking
-                    (yes/no + confidence per doc)
-                             |
-                    Position-Aware Blend
-                    Top 1-3:  75% RRF / 25% rerank
-                    Top 4-10: 60% RRF / 40% rerank
-                    Top 11+:  40% RRF / 60% rerank
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                       Hybrid Search Pipeline (DAG)                              │
+└─────────────────────────────────────────────────────────────────────────────────┘
+
+                                ┌─────────────┐
+                                │  User Query  │
+                                └──────┬───────┘
+                                       │
+                          ┌────────────┴────────────┐
+                          ▼                         ▼
+                 ┌────────────────┐       ┌─────────────────┐
+                 │ Query Expansion│       │  Original Query  │
+                 │  (LLM: 2 alt)  │       │   (×2 weight)   │
+                 └───────┬────────┘       └────────┬────────┘
+                         │ 2 alternatives          │
+                         └────────────┬────────────┘
+                                      │ 3 queries total
+              ┌───────────────────────┼───────────────────────┐
+              ▼                       ▼                       ▼
+     ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+     │  Original Query  │    │ Expanded Query 1│    │ Expanded Query 2│
+     └────────┬────────┘    └────────┬────────┘    └────────┬────────┘
+              │                      │                      │
+       ┌──────┴──────┐       ┌──────┴──────┐       ┌──────┴──────┐
+       ▼             ▼       ▼             ▼       ▼             ▼
+   ┌───────┐    ┌───────┐ ┌───────┐  ┌───────┐ ┌───────┐  ┌───────┐
+   │ BM25  │    │Vector │ │ BM25  │  │Vector │ │ BM25  │  │Vector │
+   │tantivy│    │cosine │ │tantivy│  │cosine │ │tantivy│  │cosine │
+   └───┬───┘    └───┬───┘ └───┬───┘  └───┬───┘ └───┬───┘  └───┬───┘
+       │            │         │           │         │           │
+       └─────┬──────┘         └─────┬─────┘         └─────┬─────┘
+             │                      │                      │
+             └──────────────────────┼──────────────────────┘
+                                    │ 6 ranked lists
+                                    ▼
+                       ┌───────────────────────┐
+                       │   RRF Fusion + Bonus  │
+                       │  Original query: ×2   │
+                       │  Top-rank bonus: +0.05│
+                       │     Top 30 Kept       │
+                       └───────────┬───────────┘
+                                   │
+                                   ▼
+                       ┌───────────────────────┐
+                       │    LLM Re-ranking     │
+                       │  yes/no + confidence   │
+                       │  per-document scoring  │
+                       │  4 concurrent workers  │
+                       └───────────┬───────────┘
+                                   │
+                                   ▼
+                       ┌───────────────────────┐
+                       │  Position-Aware Blend │
+                       │  Top 1-3:  75% RRF    │
+                       │  Top 4-10: 60% RRF    │
+                       │  Top 11+:  40% RRF    │
+                       └───────────┬───────────┘
+                                   │
+                                   ▼
+                       ┌───────────────────────┐
+                       │    Final Results      │
+                       │  (user-specified limit)│
+                       └───────────────────────┘
+```
+
+### Indexing Pipeline DAG
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                          Indexing Pipeline (DAG)                                 │
+└─────────────────────────────────────────────────────────────────────────────────┘
+
+     ┌──────────────┐
+     │  Git URL      │
+     └──────┬───────┘
+            │
+            ▼
+     ┌──────────────┐
+     │  git2 clone  │─────── clone to data/repos/<uuid>/
+     └──────┬───────┘
+            │
+            ▼
+     ┌──────────────┐
+     │  Walk Files  │─────── skip hidden dirs, node_modules, target, etc.
+     │  60+ langs   │        skip binary files, >1MB files
+     └──────┬───────┘
+            │
+            ▼
+     ┌──────────────┐
+     │  Chunk Files │─────── 100 lines/chunk, 20 line overlap
+     └──────┬───────┘
+            │
+            ├──────────────────────────┐
+            ▼                          ▼
+     ┌──────────────┐          ┌──────────────────┐
+     │ Tantivy BM25 │          │ LLM Embeddings   │
+     │ Index        │          │ (Ollama/OpenAI)   │
+     │ (sync, disk) │          │ batch, 32 at a    │
+     └──────────────┘          │ time              │
+                               └────────┬─────────┘
+                                        │
+                                        ▼
+                               ┌──────────────────┐
+                               │ Vector Store      │
+                               │ (memory + JSON)   │
+                               └──────────────────┘
+```
+
+## Module Architecture
+
+```
+src/
+├── lib.rs              # Crate root with pipeline DAG documentation
+├── main.rs             # Axum server entrypoint
+├── config.rs           # Env-based config (data dirs, LLM settings, bind address)
+├── models.rs           # Shared types: Repo, FileChunk, SearchHit, SearchRequest
+├── state.rs            # AppState: shared BM25 + vector + config + HTTP client
+│
+├── git/
+│   ├── mod.rs
+│   └── clone.rs        # git2 clone, file walking, language detection (60+ langs)
+│
+├── search/
+│   ├── mod.rs
+│   ├── bm25.rs         # Tantivy BM25 index (create/search/delete)
+│   ├── vector.rs       # In-memory cosine similarity store (add/search/delete/persist)
+│   └── hybrid.rs       # Multi-query RRF fusion with weighted scoring + top-rank bonus
+│
+├── llm/
+│   ├── mod.rs
+│   ├── embeddings.rs   # Batch embedding (Ollama /api/embed, OpenAI /v1/embeddings)
+│   ├── query_expand.rs # Query expansion: 2 alternative phrasings via LLM chat
+│   └── rerank.rs       # Yes/no per-doc re-ranking + position-aware score blending
+│
+└── api/
+    ├── mod.rs
+    ├── repos.rs        # POST/GET/DELETE repos, clone+index pipeline, chunk_file()
+    └── search.rs       # Full search orchestration: expand → search × 3 → RRF → rerank
+
+tests/
+└── integration_test.rs # End-to-end tests: indexing, search, multi-repo, fusion, delete
 ```
 
 ## Features
 
 - **Clone any git repo** via URL - walks all source files and indexes them
-- **BM25 full-text search** via [tantivy](https://github.com/quickwit-oss/tantivy)
+- **BM25 full-text search** via [tantivy](https://github.com/quickwit-oss/tantivy) - no LLM required
 - **Vector semantic search** with embeddings from Ollama or OpenAI-compatible APIs
-- **LLM re-ranking** with yes/no relevance judgments and position-aware score blending
-- **Query expansion** using the LLM to generate alternative search phrasings
-- **Multi-query RRF fusion** combining results across original + expanded queries
-- Dark-themed web UI with real-time pipeline status
+- **Query expansion** - LLM generates 2 alternative search phrasings
+- **Multi-query RRF fusion** - combines 6 ranked lists (3 queries x 2 retrieval methods) with weighted scoring
+- **LLM re-ranking** - per-document yes/no + confidence judgments
+- **Position-aware blending** - top results preserve RRF ordering, lower results defer to LLM
+- **Graceful degradation** - BM25 works standalone; vector/LLM features skip if unavailable
+- Dark-themed web UI with pipeline status visualization
 
 ## Quick Start
 
@@ -55,8 +171,8 @@ A Rust web app for cloning git repositories and searching them with a hybrid pip
 
 ```bash
 # Install ollama, then pull models:
-ollama pull nomic-embed-text   # embeddings
-ollama pull llama3.2           # chat/reranking
+ollama pull nomic-embed-text   # embeddings (768-dim)
+ollama pull llama3.2           # chat/reranking/query expansion
 ```
 
 ### Build & Run
@@ -67,6 +183,22 @@ cargo build --release
 ```
 
 The server starts on `http://localhost:3000`.
+
+### Run Tests
+
+```bash
+cargo test
+```
+
+90 tests: 84 unit tests + 6 integration tests covering:
+- BM25 indexing, search, deletion, persistence, repo filtering
+- Cosine similarity edge cases, vector store CRUD, persistence
+- Multi-query RRF fusion, weighting, deduplication, top-rank bonus
+- File walking, language detection, binary filtering
+- LLM response parsing (JSON, markdown-wrapped, keyword fallback)
+- Query expansion parsing (clean JSON, embedded, Unicode)
+- File chunking (overlap, boundaries, content integrity)
+- End-to-end index → search → fusion pipelines
 
 ### Environment Variables
 
@@ -86,18 +218,60 @@ The server starts on `http://localhost:3000`.
 | Method | Endpoint | Description |
 |---|---|---|
 | `GET` | `/api/repos` | List all repositories |
-| `POST` | `/api/repos` | Add a repo `{"url": "..."}` |
+| `POST` | `/api/repos` | Add a repo `{"url": "https://..."}` |
 | `DELETE` | `/api/repos/{id}` | Delete a repo and its index |
-| `POST` | `/api/search` | Search `{"query": "...", "use_bm25": true, "use_vector": true, "use_rerank": false}` |
+| `POST` | `/api/search` | Hybrid search (see below) |
 | `GET` | `/api/config` | Get LLM configuration |
 | `PUT` | `/api/config` | Update LLM configuration |
 
-## Architecture
+### Search Request
 
-- **Axum** web framework with async handlers
-- **git2** for cloning repositories
-- **tantivy** for BM25 full-text indexing and search
-- **In-memory vector store** with cosine similarity (persisted to JSON)
-- **Ollama / OpenAI** compatible API for embeddings and chat
-- File chunking: ~100 lines per chunk with 20-line overlap
-- Supports 60+ programming languages and file types
+```json
+{
+  "query": "database connection pool",
+  "limit": 20,
+  "use_bm25": true,
+  "use_vector": true,
+  "use_rerank": false,
+  "repo_ids": null
+}
+```
+
+- `use_bm25` / `use_vector`: toggle retrieval methods independently
+- `use_rerank`: enables query expansion + LLM re-ranking (requires running LLM)
+- `repo_ids`: optional array of UUIDs to filter results to specific repos
+
+### Search Response
+
+```json
+{
+  "query": "database connection pool",
+  "results": [
+    {
+      "repo_id": "...",
+      "repo_name": "my-service",
+      "file_path": "src/db.rs",
+      "chunk_index": 0,
+      "content": "pub async fn connect(url: &str) ...",
+      "language": "rust",
+      "start_line": 1,
+      "end_line": 100,
+      "bm25_score": 5.23,
+      "vector_score": 0.87,
+      "combined_score": 0.0328,
+      "rerank_score": null
+    }
+  ],
+  "total_bm25_hits": 15,
+  "total_vector_hits": 12
+}
+```
+
+## Key Design Decisions
+
+- **Reciprocal Rank Fusion (RRF)** over score normalization: RRF doesn't require calibrating scores across different retrieval methods
+- **×2 weight for original query**: prevents query expansion from dominating when the original already matches well
+- **Top-rank bonus (+0.05)**: rewards documents that rank #1 in any retrieval list
+- **Position-aware blending**: top RRF results are likely already good, so they keep more of their RRF score; lower-ranked results benefit more from LLM re-ranking
+- **100-line chunks with 20-line overlap**: balances context window efficiency with avoiding split-function boundaries
+- **Best-effort vector indexing**: if Ollama isn't running, BM25 indexing still completes successfully
