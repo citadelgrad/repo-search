@@ -17,6 +17,8 @@ pub struct Config {
     pub clone_timeout_secs: u64,
     /// Maximum repo size in MB (checked after clone)
     pub max_repo_size_mb: u64,
+    /// Maximum total vector entries in memory (0 = unlimited)
+    pub max_vector_entries: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,6 +47,7 @@ impl Default for Config {
             max_concurrent_clones: 2,
             clone_timeout_secs: 300,
             max_repo_size_mb: 500,
+            max_vector_entries: 500_000,
         }
     }
 }
@@ -110,6 +113,11 @@ impl Config {
         if let Ok(val) = std::env::var("REPO_SEARCH_MAX_REPO_SIZE_MB") {
             if let Ok(v) = val.parse() {
                 config.max_repo_size_mb = v;
+            }
+        }
+        if let Ok(val) = std::env::var("REPO_SEARCH_MAX_VECTOR_ENTRIES") {
+            if let Ok(v) = val.parse() {
+                config.max_vector_entries = v;
             }
         }
 

@@ -34,7 +34,8 @@ impl AppState {
         };
 
         let bm25 = Bm25Index::open_or_create(&config.index_dir())?;
-        let vectors = VectorStore::open_or_create(&config.vector_dir())?;
+        let vectors =
+            VectorStore::open_or_create_with_limit(&config.vector_dir(), config.max_vector_entries)?;
 
         let llm_config = config.llm.clone();
         let max_concurrent_clones = config.max_concurrent_clones;

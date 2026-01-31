@@ -23,6 +23,7 @@ struct VectorEntry {
 pub struct VectorStore {
     entries: RwLock<Vec<VectorEntry>>,
     persist_path: std::path::PathBuf,
+    max_entries: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -40,6 +41,10 @@ pub struct VectorHit {
 
 impl VectorStore {
     pub fn open_or_create(vector_dir: &Path) -> Result<Self> {
+        Self::open_or_create_with_limit(vector_dir, 0)
+    }
+
+    pub fn open_or_create_with_limit(vector_dir: &Path, max_entries: usize) -> Result<Self> {
         std::fs::create_dir_all(vector_dir)?;
         let persist_path = vector_dir.join("vectors.json");
 
@@ -54,6 +59,7 @@ impl VectorStore {
         Ok(Self {
             entries: RwLock::new(entries),
             persist_path,
+            max_entries,
         })
     }
 
@@ -66,6 +72,16 @@ impl VectorStore {
         embeddings: Vec<Vec<f32>>,
     ) -> Result<()> {
         let mut entries = self.entries.write();
+
+        // Enforce memory cap
+        if self.max_entries > 0 && entries.len() + chunks.len() > self.max_entries {
+            anyhow::bail!(
+                "Vector store limit exceeded: {} existing + {} new > {} max",
+                entries.len(),
+                chunks.len(),
+                self.max_entries
+            );
+        }
 
         for (i, (file_path, chunk_index, content, language, start_line, end_line)) in
             chunks.iter().enumerate()
