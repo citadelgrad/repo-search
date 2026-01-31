@@ -1,0 +1,746 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Repo Search</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg2: #161b22;
+    --bg3: #21262d;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --text-muted: #8b949e;
+    --accent: #58a6ff;
+    --accent-dim: #1f6feb;
+    --green: #3fb950;
+    --red: #f85149;
+    --yellow: #d29922;
+    --font-mono: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+  }
+
+  .container { max-width: 1100px; margin: 0 auto; padding: 0 24px; }
+
+  header {
+    border-bottom: 1px solid var(--border);
+    padding: 16px 0;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  header h1 {
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  header h1 span { color: var(--accent); }
+
+  nav {
+    display: flex;
+    gap: 8px;
+    margin-left: auto;
+  }
+
+  nav button {
+    background: transparent;
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+    padding: 6px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+
+  nav button.active, nav button:hover {
+    background: var(--bg3);
+    color: var(--text);
+    border-color: var(--text-muted);
+  }
+
+  .page { display: none; padding: 24px 0; }
+  .page.active { display: block; }
+
+  /* ── Search Page ─────────────────────────────── */
+  .search-box {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+
+  .search-box input {
+    flex: 1;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 10px 14px;
+    border-radius: 6px;
+    font-size: 15px;
+    outline: none;
+  }
+
+  .search-box input:focus { border-color: var(--accent); }
+
+  .search-box button {
+    background: var(--accent-dim);
+    color: #fff;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+  }
+
+  .search-box button:hover { background: var(--accent); }
+
+  .search-options {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .search-options label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--text-muted);
+    cursor: pointer;
+  }
+
+  .search-options input[type="checkbox"] {
+    accent-color: var(--accent);
+  }
+
+  .search-meta {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-bottom: 12px;
+  }
+
+  .result {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 12px;
+    overflow: hidden;
+  }
+
+  .result-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+
+  .result-header .file-path {
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-weight: 500;
+  }
+
+  .result-header .repo-name {
+    color: var(--text-muted);
+    font-size: 12px;
+  }
+
+  .result-header .scores {
+    margin-left: auto;
+    display: flex;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+
+  .result-header .scores span {
+    background: var(--bg3);
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+
+  .result-header .lines {
+    color: var(--text-muted);
+    font-size: 12px;
+  }
+
+  .result pre {
+    padding: 12px 14px;
+    overflow-x: auto;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    line-height: 1.5;
+    max-height: 400px;
+    overflow-y: auto;
+    color: var(--text);
+  }
+
+  /* ── Repos Page ──────────────────────────────── */
+  .add-repo {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 24px;
+  }
+
+  .add-repo input {
+    flex: 1;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 10px 14px;
+    border-radius: 6px;
+    font-size: 14px;
+    outline: none;
+  }
+
+  .add-repo input:focus { border-color: var(--accent); }
+
+  .add-repo button {
+    background: var(--green);
+    color: #fff;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+
+  .repo-list { display: grid; gap: 12px; }
+
+  .repo-card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  .repo-card .info { flex: 1; }
+  .repo-card .name { font-weight: 600; font-size: 15px; }
+  .repo-card .url {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    word-break: break-all;
+  }
+
+  .repo-card .meta {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 4px;
+  }
+
+  .status-badge {
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: 12px;
+    font-weight: 500;
+    text-transform: uppercase;
+  }
+
+  .status-badge.ready { background: #0d3117; color: var(--green); }
+  .status-badge.cloning, .status-badge.indexing { background: #2d1b00; color: var(--yellow); }
+  .status-badge.error { background: #3d1216; color: var(--red); }
+
+  .repo-card .delete-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--red);
+    padding: 6px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+  }
+
+  .repo-card .delete-btn:hover {
+    background: #3d1216;
+    border-color: var(--red);
+  }
+
+  /* ── Settings Page ───────────────────────────── */
+  .settings-form {
+    max-width: 600px;
+  }
+
+  .form-group {
+    margin-bottom: 16px;
+  }
+
+  .form-group label {
+    display: block;
+    font-size: 13px;
+    font-weight: 500;
+    margin-bottom: 6px;
+    color: var(--text-muted);
+  }
+
+  .form-group input, .form-group select {
+    width: 100%;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 14px;
+    outline: none;
+  }
+
+  .form-group input:focus, .form-group select:focus {
+    border-color: var(--accent);
+  }
+
+  .settings-form button {
+    background: var(--accent-dim);
+    color: #fff;
+    border: none;
+    padding: 10px 24px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+  }
+
+  .empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--text-muted);
+  }
+
+  .empty-state h3 {
+    font-size: 18px;
+    margin-bottom: 8px;
+    color: var(--text);
+  }
+
+  .spinner {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+    vertical-align: middle;
+    margin-right: 6px;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    padding: 12px 18px;
+    border-radius: 8px;
+    font-size: 13px;
+    z-index: 100;
+    opacity: 0;
+    transform: translateY(10px);
+    transition: all 0.3s;
+  }
+
+  .toast.show {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  .pipeline-info {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+    margin-bottom: 20px;
+    font-size: 12px;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    line-height: 1.8;
+  }
+
+  .pipeline-info .step {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .pipeline-info .step .arrow { color: var(--accent); }
+  .pipeline-info .step.done .label { color: var(--green); }
+  .pipeline-info .step.active .label { color: var(--yellow); }
+  .pipeline-info .step .label { color: var(--text-muted); }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1><span>repo</span>search</h1>
+    <nav>
+      <button class="active" data-page="search">Search</button>
+      <button data-page="repos">Repos</button>
+      <button data-page="settings">Settings</button>
+    </nav>
+  </header>
+
+  <!-- Search Page -->
+  <div class="page active" id="page-search">
+    <div class="search-box">
+      <input type="text" id="search-input" placeholder="Search across all indexed repositories..." autofocus>
+      <button onclick="doSearch()">Search</button>
+    </div>
+    <div class="search-options">
+      <label><input type="checkbox" id="opt-bm25" checked> BM25 (full-text)</label>
+      <label><input type="checkbox" id="opt-vector" checked> Vector (semantic)</label>
+      <label><input type="checkbox" id="opt-rerank"> LLM Re-rank + Query Expansion</label>
+    </div>
+
+    <div id="pipeline-status" class="pipeline-info" style="display:none;">
+      <div class="step" id="step-expand"><span class="arrow">-></span> <span class="label">Query Expansion</span> <span class="detail"></span></div>
+      <div class="step" id="step-bm25"><span class="arrow">-></span> <span class="label">BM25 Search</span> <span class="detail"></span></div>
+      <div class="step" id="step-vector"><span class="arrow">-></span> <span class="label">Vector Search</span> <span class="detail"></span></div>
+      <div class="step" id="step-rrf"><span class="arrow">-></span> <span class="label">RRF Fusion + Top-rank Bonus</span> <span class="detail"></span></div>
+      <div class="step" id="step-rerank"><span class="arrow">-></span> <span class="label">LLM Re-ranking (position-aware blend)</span> <span class="detail"></span></div>
+    </div>
+
+    <div id="search-meta" class="search-meta" style="display:none;"></div>
+    <div id="search-results"></div>
+
+    <div id="search-empty" class="empty-state">
+      <h3>Search your code</h3>
+      <p>Add repositories in the Repos tab, then search here with hybrid BM25 + vector + LLM re-ranking.</p>
+    </div>
+  </div>
+
+  <!-- Repos Page -->
+  <div class="page" id="page-repos">
+    <div class="add-repo">
+      <input type="text" id="repo-url" placeholder="https://github.com/user/repo.git">
+      <button onclick="addRepo()">Clone + Index</button>
+    </div>
+    <div id="repo-list" class="repo-list"></div>
+    <div id="repos-empty" class="empty-state">
+      <h3>No repositories yet</h3>
+      <p>Paste a git URL above to clone and index a repository for search.</p>
+    </div>
+  </div>
+
+  <!-- Settings Page -->
+  <div class="page" id="page-settings">
+    <div class="settings-form">
+      <h2 style="margin-bottom:20px;font-size:18px;">LLM Configuration</h2>
+      <div class="form-group">
+        <label>Provider</label>
+        <select id="cfg-provider">
+          <option value="ollama">Ollama (local)</option>
+          <option value="openai">OpenAI-compatible (cloud)</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Base URL</label>
+        <input type="text" id="cfg-base-url" placeholder="http://localhost:11434">
+      </div>
+      <div class="form-group">
+        <label>Chat Model (re-ranking / query expansion)</label>
+        <input type="text" id="cfg-chat-model" placeholder="llama3.2">
+      </div>
+      <div class="form-group">
+        <label>Embedding Model</label>
+        <input type="text" id="cfg-embed-model" placeholder="nomic-embed-text">
+      </div>
+      <div class="form-group">
+        <label>Embedding Dimension</label>
+        <input type="number" id="cfg-embed-dim" placeholder="768">
+      </div>
+      <div class="form-group">
+        <label>API Key (only for cloud providers)</label>
+        <input type="password" id="cfg-api-key" placeholder="sk-...">
+      </div>
+      <button onclick="saveConfig()">Save Configuration</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API = '';
+
+// ── Navigation ───────────────────────────────────
+document.querySelectorAll('nav button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('page-' + btn.dataset.page).classList.add('active');
+    if (btn.dataset.page === 'repos') loadRepos();
+    if (btn.dataset.page === 'settings') loadConfig();
+  });
+});
+
+// ── Search ───────────────────────────────────────
+document.getElementById('search-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') doSearch();
+});
+
+async function doSearch() {
+  const query = document.getElementById('search-input').value.trim();
+  if (!query) return;
+
+  const useBm25 = document.getElementById('opt-bm25').checked;
+  const useVector = document.getElementById('opt-vector').checked;
+  const useRerank = document.getElementById('opt-rerank').checked;
+
+  const resultsDiv = document.getElementById('search-results');
+  const metaDiv = document.getElementById('search-meta');
+  const emptyDiv = document.getElementById('search-empty');
+  const pipelineDiv = document.getElementById('pipeline-status');
+
+  emptyDiv.style.display = 'none';
+  resultsDiv.innerHTML = '<p style="color:var(--text-muted)"><span class="spinner"></span> Searching...</p>';
+  metaDiv.style.display = 'none';
+
+  // Show pipeline status if rerank is enabled
+  if (useRerank) {
+    pipelineDiv.style.display = 'block';
+    document.querySelectorAll('#pipeline-status .step').forEach(s => {
+      s.classList.remove('done', 'active');
+      s.querySelector('.detail').textContent = '';
+    });
+    document.getElementById('step-expand').classList.add('active');
+    document.getElementById('step-expand').querySelector('.detail').textContent = '...';
+  } else {
+    pipelineDiv.style.display = 'none';
+  }
+
+  try {
+    const resp = await fetch(API + '/api/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query,
+        limit: 20,
+        use_bm25: useBm25,
+        use_vector: useVector,
+        use_rerank: useRerank,
+      }),
+    });
+
+    if (!resp.ok) {
+      const err = await resp.text();
+      throw new Error(err);
+    }
+
+    const data = await resp.json();
+
+    // Update pipeline status
+    if (useRerank) {
+      document.querySelectorAll('#pipeline-status .step').forEach(s => s.classList.add('done'));
+      document.getElementById('step-bm25').querySelector('.detail').textContent = `(${data.total_bm25_hits} hits)`;
+      document.getElementById('step-vector').querySelector('.detail').textContent = `(${data.total_vector_hits} hits)`;
+      document.getElementById('step-rrf').querySelector('.detail').textContent = `(top 30)`;
+      document.getElementById('step-rerank').querySelector('.detail').textContent = `(${data.results.length} final)`;
+      document.getElementById('step-expand').querySelector('.detail').textContent = `(done)`;
+    }
+
+    metaDiv.style.display = 'block';
+    metaDiv.textContent = `${data.results.length} results | BM25: ${data.total_bm25_hits} hits | Vector: ${data.total_vector_hits} hits`;
+
+    if (data.results.length === 0) {
+      resultsDiv.innerHTML = '<div class="empty-state"><h3>No results found</h3><p>Try a different query or add more repositories.</p></div>';
+      return;
+    }
+
+    resultsDiv.innerHTML = data.results.map(r => `
+      <div class="result">
+        <div class="result-header">
+          <span class="repo-name">${esc(r.repo_name)}</span>
+          <span class="file-path">${esc(r.file_path)}</span>
+          <span class="lines">L${r.start_line}-${r.end_line}</span>
+          <div class="scores">
+            ${r.bm25_score > 0 ? `<span>BM25: ${r.bm25_score.toFixed(2)}</span>` : ''}
+            ${r.vector_score > 0 ? `<span>Vec: ${r.vector_score.toFixed(3)}</span>` : ''}
+            <span>RRF: ${r.combined_score.toFixed(4)}</span>
+            ${r.rerank_score !== null ? `<span>Re: ${r.rerank_score.toFixed(3)}</span>` : ''}
+          </div>
+        </div>
+        <pre>${esc(r.content)}</pre>
+      </div>
+    `).join('');
+
+  } catch (err) {
+    resultsDiv.innerHTML = `<p style="color:var(--red)">Search failed: ${esc(err.message)}</p>`;
+  }
+}
+
+// ── Repos ────────────────────────────────────────
+let repoPolling = null;
+
+async function loadRepos() {
+  try {
+    const resp = await fetch(API + '/api/repos');
+    const repos = await resp.json();
+
+    const listDiv = document.getElementById('repo-list');
+    const emptyDiv = document.getElementById('repos-empty');
+
+    if (repos.length === 0) {
+      listDiv.innerHTML = '';
+      emptyDiv.style.display = 'block';
+      return;
+    }
+
+    emptyDiv.style.display = 'none';
+    listDiv.innerHTML = repos.map(r => {
+      const statusClass = typeof r.status === 'string' ? r.status : 'error';
+      const statusText = typeof r.status === 'string' ? r.status : `error: ${r.status.error}`;
+      return `
+        <div class="repo-card">
+          <div class="info">
+            <div class="name">${esc(r.name)}</div>
+            <div class="url">${esc(r.url)}</div>
+            <div class="meta">
+              ${r.file_count} files | Added ${new Date(r.added_at).toLocaleDateString()}
+              ${r.indexed_at ? ' | Indexed ' + new Date(r.indexed_at).toLocaleDateString() : ''}
+            </div>
+          </div>
+          <span class="status-badge ${statusClass}">${statusText === 'cloning' || statusText === 'indexing' ? '<span class="spinner"></span>' : ''}${statusText}</span>
+          <button class="delete-btn" onclick="deleteRepo('${r.id}')">Delete</button>
+        </div>
+      `;
+    }).join('');
+
+    // Auto-poll if any repos are still processing
+    const processing = repos.some(r => r.status === 'cloning' || r.status === 'indexing');
+    if (processing && !repoPolling) {
+      repoPolling = setInterval(loadRepos, 3000);
+    } else if (!processing && repoPolling) {
+      clearInterval(repoPolling);
+      repoPolling = null;
+    }
+  } catch (err) {
+    toast('Failed to load repos: ' + err.message);
+  }
+}
+
+async function addRepo() {
+  const input = document.getElementById('repo-url');
+  const url = input.value.trim();
+  if (!url) return;
+
+  try {
+    const resp = await fetch(API + '/api/repos', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    });
+
+    if (!resp.ok) {
+      const err = await resp.text();
+      throw new Error(err);
+    }
+
+    input.value = '';
+    toast('Repository added - cloning and indexing in background');
+    loadRepos();
+
+    // Start polling
+    if (!repoPolling) {
+      repoPolling = setInterval(loadRepos, 3000);
+    }
+  } catch (err) {
+    toast('Failed to add repo: ' + err.message);
+  }
+}
+
+async function deleteRepo(id) {
+  if (!confirm('Delete this repository and all its index data?')) return;
+
+  try {
+    await fetch(API + `/api/repos/${id}`, { method: 'DELETE' });
+    toast('Repository deleted');
+    loadRepos();
+  } catch (err) {
+    toast('Failed to delete: ' + err.message);
+  }
+}
+
+// ── Settings ─────────────────────────────────────
+async function loadConfig() {
+  try {
+    const resp = await fetch(API + '/api/config');
+    const cfg = await resp.json();
+
+    document.getElementById('cfg-provider').value = cfg.provider;
+    document.getElementById('cfg-base-url').value = cfg.base_url;
+    document.getElementById('cfg-chat-model').value = cfg.chat_model;
+    document.getElementById('cfg-embed-model').value = cfg.embedding_model;
+    document.getElementById('cfg-embed-dim').value = cfg.embedding_dim;
+    document.getElementById('cfg-api-key').value = cfg.api_key || '';
+  } catch (err) {
+    toast('Failed to load config: ' + err.message);
+  }
+}
+
+async function saveConfig() {
+  const update = {
+    provider: document.getElementById('cfg-provider').value,
+    base_url: document.getElementById('cfg-base-url').value,
+    chat_model: document.getElementById('cfg-chat-model').value,
+    embedding_model: document.getElementById('cfg-embed-model').value,
+    embedding_dim: parseInt(document.getElementById('cfg-embed-dim').value) || 768,
+  };
+
+  const apiKey = document.getElementById('cfg-api-key').value;
+  if (apiKey) update.api_key = apiKey;
+
+  try {
+    const resp = await fetch(API + '/api/config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(update),
+    });
+
+    if (!resp.ok) throw new Error(await resp.text());
+    toast('Configuration saved');
+  } catch (err) {
+    toast('Failed to save config: ' + err.message);
+  }
+}
+
+// ── Utilities ────────────────────────────────────
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 3000);
+}
+
+// Initial load
+loadRepos();
+</script>
+</body>
+</html>

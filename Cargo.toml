@@ -1,0 +1,34 @@
+[package]
+name = "repo-search"
+version = "0.1.0"
+edition = "2021"
+description = "Clone and search git repos with BM25, vector search, and LLM re-ranking"
+
+[dependencies]
+# Web framework
+axum = { version = "0.7", features = ["json", "multipart"] }
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.5", features = ["cors", "fs"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Git operations
+git2 = "0.19"
+
+# Full-text search (BM25)
+tantivy = "0.22"
+
+# HTTP client (for Ollama / cloud LLM APIs)
+reqwest = { version = "0.12", features = ["json"] }
+
+# Utilities
+uuid = { version = "1", features = ["v4", "serde"] }
+walkdir = "2"
+anyhow = "1"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+chrono = { version = "0.4", features = ["serde"] }
+parking_lot = "0.12"

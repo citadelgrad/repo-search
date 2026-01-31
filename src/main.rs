@@ -1,0 +1,61 @@
+mod api;
+mod config;
+mod git;
+mod llm;
+mod models;
+mod search;
+mod state;
+
+use axum::http::header;
+use axum::response::Html;
+use axum::routing::{delete, get, post, put};
+use axum::Router;
+use tower_http::cors::{Any, CorsLayer};
+use tracing_subscriber::EnvFilter;
+
+use crate::config::Config;
+use crate::state::AppState;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    // Initialize tracing
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .init();
+
+    let config = Config::from_env();
+    tracing::info!("Data directory: {}", config.data_dir.display());
+    tracing::info!("LLM provider: {} ({})", config.llm.provider, config.llm.base_url);
+
+    let state = AppState::new(config.clone())?;
+
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(vec![header::CONTENT_TYPE, header::AUTHORIZATION]);
+
+    let app = Router::new()
+        // Serve frontend
+        .route("/", get(serve_index))
+        // API routes
+        .route("/api/repos", get(api::repos::list_repos))
+        .route("/api/repos", post(api::repos::add_repo))
+        .route("/api/repos/{id}", delete(api::repos::delete_repo))
+        .route("/api/search", post(api::search::search))
+        .route("/api/config", get(api::repos::get_config))
+        .route("/api/config", put(api::repos::update_config))
+        .layer(cors)
+        .with_state(state);
+
+    let listener = tokio::net::TcpListener::bind(&config.bind_addr).await?;
+    tracing::info!("Server listening on {}", config.bind_addr);
+
+    axum::serve(listener, app).await?;
+    Ok(())
+}
+
+async fn serve_index() -> Html<&'static str> {
+    Html(include_str!("../static/index.html"))
+}
