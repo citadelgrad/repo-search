@@ -215,7 +215,8 @@
     margin-bottom: 12px;
   }
 
-  .result {
+  /* ── File-grouped result cards ─────────────────── */
+  .file-result {
     background: var(--bg2);
     border: 1px solid var(--border);
     border-radius: 8px;
@@ -223,58 +224,147 @@
     overflow: hidden;
   }
 
-  .result-header {
+  .file-result-header {
     display: flex;
     align-items: center;
     gap: 8px;
     padding: 10px 14px;
-    border-bottom: 1px solid var(--border);
     font-size: 13px;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.1s;
   }
 
-  .result-header .file-path {
+  .file-result-header:hover { background: var(--bg3); }
+
+  .file-result-header .chevron {
+    color: var(--text-muted);
+    font-size: 12px;
+    transition: transform 0.15s;
+    flex-shrink: 0;
+    width: 16px;
+    text-align: center;
+  }
+
+  .file-result.collapsed .chevron { transform: rotate(-90deg); }
+  .file-result.collapsed .file-result-body { display: none; }
+
+  .file-result-header .file-path {
     color: var(--accent);
     font-family: var(--font-mono);
     font-weight: 500;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
-  .result-header .repo-name {
+  .file-result-header .lang-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .file-result-header .lang-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .file-result-header .match-count {
+    font-size: 11px;
+    padding: 1px 7px;
+    border-radius: 10px;
+    background: var(--bg3);
+    color: var(--text-muted);
+    font-weight: 500;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .file-result-header .repo-name {
     font-size: 11px;
     padding: 2px 8px;
     border-radius: 4px;
     font-weight: 500;
     white-space: nowrap;
-  }
-
-  .result-header .scores {
     margin-left: auto;
-    display: flex;
-    gap: 8px;
-    font-size: 11px;
-    color: var(--text-muted);
+    flex-shrink: 0;
   }
 
-  .result-header .scores span {
-    background: var(--bg3);
-    padding: 2px 6px;
-    border-radius: 4px;
-  }
+  .file-result-body { border-top: 1px solid var(--border); }
 
-  .result-header .lines {
-    color: var(--text-muted);
-    font-size: 12px;
-  }
-
-  .result pre {
-    padding: 12px 14px;
-    overflow-x: auto;
+  .code-table {
+    width: 100%;
+    border-collapse: collapse;
     font-family: var(--font-mono);
     font-size: 12.5px;
     line-height: 1.5;
-    max-height: 400px;
-    overflow-y: auto;
+  }
+
+  .code-line .line-num {
+    padding: 0 10px 0 14px;
+    text-align: right;
+    color: var(--text-muted);
+    user-select: none;
+    white-space: nowrap;
+    vertical-align: top;
+    width: 1px;
+    opacity: 0.6;
+  }
+
+  .code-line .line-code {
+    padding: 0 14px 0 8px;
+    white-space: pre;
+    overflow-x: auto;
     color: var(--text);
   }
+
+  .code-line.match-line { background: rgba(210, 153, 34, 0.08); }
+
+  .code-line.match-line .line-num { opacity: 1; color: var(--yellow); }
+
+  mark {
+    background: rgba(210, 153, 34, 0.35);
+    color: inherit;
+    border-radius: 2px;
+    padding: 0 1px;
+  }
+
+  .region-separator td {
+    padding: 2px 0;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 11px;
+    font-family: var(--font-mono);
+    border-top: 1px dashed var(--border);
+    border-bottom: 1px dashed var(--border);
+    background: var(--bg);
+    user-select: none;
+  }
+
+  .code-region.hidden { display: none; }
+
+  .show-more-btn {
+    display: block;
+    width: 100%;
+    padding: 7px 14px;
+    background: transparent;
+    border: none;
+    border-top: 1px solid var(--border);
+    color: var(--accent);
+    font-size: 12px;
+    cursor: pointer;
+    text-align: center;
+    font-family: inherit;
+  }
+
+  .show-more-btn:hover { background: var(--bg3); }
 
   /* ── Repos Page ──────────────────────────────── */
   .add-repo {
@@ -613,6 +703,176 @@ function repoColorMap() {
   return map;
 }
 
+// ── Language Colors (GitHub Linguist) ────────────
+const LANG_COLORS = {
+  rust:'#dea584',python:'#3572A5',javascript:'#f1e05a',typescript:'#3178c6',
+  tsx:'#3178c6',jsx:'#f1e05a',go:'#00ADD8',java:'#b07219',c:'#555555',
+  cpp:'#f34b7d',csharp:'#178600',ruby:'#701516',php:'#4F5D95',swift:'#F05138',
+  kotlin:'#A97BFF',scala:'#c22d40',r:'#198CE7',lua:'#000080',shell:'#89e051',
+  sql:'#e38c00',html:'#e34c26',css:'#563d7c',json:'#292929',yaml:'#cb171e',
+  toml:'#9c4221',xml:'#0060ac',text:'#8b949e',protobuf:'#9e7eff',
+  graphql:'#e10098',vue:'#41b883',svelte:'#ff3e00',zig:'#ec915c',
+  dart:'#00B4AB',nim:'#ffc200',julia:'#a270ba',elixir:'#6e4a7e',
+  haskell:'#5e5086',clojure:'#db5855',hcl:'#844fba',nix:'#7e7eff',
+};
+
+const LANG_LABELS = {
+  rust:'Rust',python:'Python',javascript:'JavaScript',typescript:'TypeScript',
+  tsx:'TSX',jsx:'JSX',go:'Go',java:'Java',c:'C',cpp:'C++',csharp:'C#',
+  ruby:'Ruby',php:'PHP',swift:'Swift',kotlin:'Kotlin',scala:'Scala',r:'R',
+  lua:'Lua',shell:'Shell',sql:'SQL',html:'HTML',css:'CSS',json:'JSON',
+  yaml:'YAML',toml:'TOML',xml:'XML',text:'Text',protobuf:'Protobuf',
+  graphql:'GraphQL',vue:'Vue',svelte:'Svelte',zig:'Zig',dart:'Dart',
+  nim:'Nim',julia:'Julia',elixir:'Elixir',haskell:'Haskell',clojure:'Clojure',
+  hcl:'HCL',nix:'Nix',
+};
+
+// ── Grouped Results Helpers ──────────────────────
+
+function groupResults(results) {
+  const groups = new Map();
+  for (const r of results) {
+    const key = r.repo_id + ':' + r.file_path;
+    if (!groups.has(key)) {
+      groups.set(key, {
+        repo_id: r.repo_id, repo_name: r.repo_name,
+        file_path: r.file_path, language: r.language,
+        chunks: [], bestScore: -Infinity,
+      });
+    }
+    const g = groups.get(key);
+    g.chunks.push(r);
+    const s = r.rerank_score ?? r.combined_score;
+    if (s > g.bestScore) g.bestScore = s;
+  }
+  return Array.from(groups.values()).sort((a, b) => b.bestScore - a.bestScore);
+}
+
+function mergeChunksToLineMap(chunks) {
+  const map = new Map();
+  for (const c of chunks) {
+    const lines = c.content.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const lineNum = c.start_line + i;
+      if (!map.has(lineNum)) map.set(lineNum, lines[i]);
+    }
+  }
+  return map;
+}
+
+function extractMatchRegions(lineMap, query, contextLines) {
+  if (contextLines === undefined) contextLines = 3;
+  const terms = query.trim().split(/\s+/).filter(Boolean);
+  const allLineNums = Array.from(lineMap.keys()).sort((a, b) => a - b);
+  if (allLineNums.length === 0) return [];
+
+  // Find lines that match any search term
+  const matchSet = new Set();
+  for (const ln of allLineNums) {
+    const text = lineMap.get(ln).toLowerCase();
+    for (const t of terms) {
+      if (text.includes(t.toLowerCase())) { matchSet.add(ln); break; }
+    }
+  }
+
+  // Semantic-only fallback: show first 6 lines as preview
+  if (matchSet.size === 0) {
+    const preview = allLineNums.slice(0, 6);
+    if (preview.length === 0) return [];
+    return [{ lines: preview, matchLines: new Set() }];
+  }
+
+  // Expand match lines by context
+  const includeSet = new Set();
+  for (const ln of matchSet) {
+    for (let d = -contextLines; d <= contextLines; d++) {
+      const n = ln + d;
+      if (lineMap.has(n)) includeSet.add(n);
+    }
+  }
+
+  // Group contiguous included lines into regions
+  const included = Array.from(includeSet).sort((a, b) => a - b);
+  const regions = [];
+  let region = null;
+  for (const ln of included) {
+    if (!region || ln > region.lines[region.lines.length - 1] + 1) {
+      region = { lines: [], matchLines: matchSet };
+      regions.push(region);
+    }
+    region.lines.push(ln);
+  }
+  return regions;
+}
+
+function highlightTerms(escapedText, terms) {
+  if (!terms.length) return escapedText;
+  const escaped = terms.map(t => esc(t).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const re = new RegExp('(' + escaped.join('|') + ')', 'gi');
+  return escapedText.replace(re, '<mark>$1</mark>');
+}
+
+function renderGroupedResults(groups, query) {
+  const colors = repoColorMap();
+  const terms = query.trim().split(/\s+/).filter(Boolean);
+  const MAX_VISIBLE_REGIONS = 2;
+
+  return groups.map(g => {
+    const lineMap = mergeChunksToLineMap(g.chunks);
+    const regions = extractMatchRegions(lineMap, query);
+    const langColor = LANG_COLORS[g.language] || '#8b949e';
+    const langLabel = LANG_LABELS[g.language] || g.language;
+    const c = colors[g.repo_id] || 'var(--text-muted)';
+
+    // Count matching lines
+    const matchCount = regions.reduce((sum, r) =>
+      sum + r.lines.filter(ln => r.matchLines.has(ln)).length, 0);
+
+    const hiddenCount = regions.length > MAX_VISIBLE_REGIONS ? regions.length - MAX_VISIBLE_REGIONS : 0;
+
+    const regionsHtml = regions.map((region, ri) => {
+      const hidden = ri >= MAX_VISIBLE_REGIONS ? ' hidden' : '';
+      const rows = region.lines.map(ln => {
+        const raw = lineMap.get(ln) || '';
+        const isMatch = region.matchLines.has(ln);
+        const code = isMatch ? highlightTerms(esc(raw), terms) : esc(raw);
+        return `<tr class="code-line${isMatch ? ' match-line' : ''}"><td class="line-num">${ln}</td><td class="line-code">${code}</td></tr>`;
+      }).join('');
+
+      const sep = ri > 0 ? '<tr class="region-separator"><td colspan="2">...</td></tr>' : '';
+      return `${sep}<tbody class="code-region${hidden}">${rows}</tbody>`;
+    }).join('');
+
+    const showMoreBtn = hiddenCount > 0
+      ? `<button class="show-more-btn" onclick="showMoreRegions(this)">Show ${hiddenCount} more match region${hiddenCount > 1 ? 's' : ''}</button>`
+      : '';
+
+    return `<div class="file-result">
+      <div class="file-result-header" onclick="toggleFileResult(this)">
+        <span class="chevron">&#9660;</span>
+        <span class="file-path" title="${esc(g.file_path)}">${esc(g.file_path)}</span>
+        <span class="lang-tag"><span class="lang-dot" style="background:${langColor}"></span>${esc(langLabel)}</span>
+        ${matchCount > 0 ? `<span class="match-count">${matchCount} match${matchCount !== 1 ? 'es' : ''}</span>` : ''}
+        <span class="repo-name" style="background:${c}22; color:${c}; border:1px solid ${c}44;">${esc(g.repo_name)}</span>
+      </div>
+      <div class="file-result-body">
+        <table class="code-table">${regionsHtml}</table>
+        ${showMoreBtn}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function toggleFileResult(headerEl) {
+  headerEl.parentElement.classList.toggle('collapsed');
+}
+
+function showMoreRegions(btn) {
+  const body = btn.parentElement;
+  body.querySelectorAll('.code-region.hidden').forEach(el => el.classList.remove('hidden'));
+  btn.remove();
+}
+
 // ── Navigation ───────────────────────────────────
 document.querySelectorAll('nav button').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -764,33 +1024,21 @@ async function doSearch() {
       document.getElementById('step-expand').querySelector('.detail').textContent = `(done)`;
     }
 
-    metaDiv.style.display = 'block';
-    metaDiv.textContent = `${data.results.length} results | BM25: ${data.total_bm25_hits} hits | Vector: ${data.total_vector_hits} hits`;
-
     if (data.results.length === 0) {
+      metaDiv.style.display = 'block';
+      metaDiv.textContent = 'No results found';
+      // Safe: static HTML with no user content
       resultsDiv.innerHTML = '<div class="empty-state"><h3>No results found</h3><p>Try a different query or add more repositories.</p></div>';
       return;
     }
 
-    const colors = repoColorMap();
-    resultsDiv.innerHTML = data.results.map(r => {
-      const c = colors[r.repo_id] || 'var(--text-muted)';
-      return `
-      <div class="result">
-        <div class="result-header">
-          <span class="repo-name" style="background:${c}22; color:${c}; border:1px solid ${c}44;">${esc(r.repo_name)}</span>
-          <span class="file-path">${esc(r.file_path)}</span>
-          <span class="lines">L${r.start_line}-${r.end_line}</span>
-          <div class="scores">
-            ${r.bm25_score > 0 ? `<span>BM25: ${r.bm25_score.toFixed(2)}</span>` : ''}
-            ${r.vector_score > 0 ? `<span>Vec: ${r.vector_score.toFixed(3)}</span>` : ''}
-            <span>RRF: ${r.combined_score.toFixed(4)}</span>
-            ${r.rerank_score !== null ? `<span>Re: ${r.rerank_score.toFixed(3)}</span>` : ''}
-          </div>
-        </div>
-        <pre>${esc(r.content)}</pre>
-      </div>`;
-    }).join('');
+    const groups = groupResults(data.results);
+    const fileCount = groups.length;
+    metaDiv.style.display = 'block';
+    metaDiv.textContent = `${data.results.length} results across ${fileCount} file${fileCount !== 1 ? 's' : ''}`;
+
+    // Safe: renderGroupedResults escapes all user content via esc() before HTML insertion
+    resultsDiv.innerHTML = renderGroupedResults(groups, query);
 
   } catch (err) {
     resultsDiv.innerHTML = `<p style="color:var(--red)">Search failed: ${esc(err.message)}</p>`;
