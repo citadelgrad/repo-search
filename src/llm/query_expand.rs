@@ -3,24 +3,53 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::LlmConfig;
 
+/// Maximum allowed query length to prevent prompt stuffing.
+const MAX_QUERY_LEN: usize = 500;
+
+/// Sanitize user input before including in LLM prompts.
+/// Strips ChatML control tokens and truncates to a safe length.
+fn sanitize_query(input: &str) -> String {
+    let truncated = if input.len() > MAX_QUERY_LEN {
+        &input[..input.char_indices()
+            .take_while(|(i, _)| *i <= MAX_QUERY_LEN)
+            .last()
+            .map(|(i, _)| i)
+            .unwrap_or(0)]
+    } else {
+        input
+    };
+    sanitize_for_prompt(truncated)
+}
+
+/// Strip ChatML and other control tokens from text to prevent prompt injection.
+pub(crate) fn sanitize_for_prompt(text: &str) -> String {
+    text.replace("<|im_start|>", "")
+        .replace("<|im_end|>", "")
+        .replace("<|system|>", "")
+        .replace("<|user|>", "")
+        .replace("<|assistant|>", "")
+        .replace("<|endoftext|>", "")
+}
+
 /// Expand a user query into 2 alternative phrasings using the LLM.
 pub async fn expand_query(
     client: &reqwest::Client,
     config: &LlmConfig,
     original_query: &str,
 ) -> Result<Vec<String>> {
-    let prompt = format!(
-        "You are a code search query expander. Given a search query, generate exactly 2 \
+    let safe_query = sanitize_query(original_query);
+
+    let system_msg = "You are a code search query expander. Given a search query, generate exactly 2 \
          alternative phrasings that capture different aspects or synonyms of the intent. \
-         The alternatives should help find relevant code that the original query might miss.\n\n\
-         Original query: \"{original_query}\"\n\n\
+         The alternatives should help find relevant code that the original query might miss.\n\
          Respond with ONLY a JSON array of 2 strings. No explanation.\n\
-         Example: [\"alternative phrasing 1\", \"alternative phrasing 2\"]"
-    );
+         Example: [\"alternative phrasing 1\", \"alternative phrasing 2\"]";
+
+    let user_msg = format!("Original query: \"{safe_query}\"");
 
     let response = match config.provider.as_str() {
-        "ollama" => call_ollama(client, config, &prompt).await?,
-        "openai" => call_openai(client, config, &prompt).await?,
+        "ollama" => call_ollama(client, config, system_msg, &user_msg).await?,
+        "openai" => call_openai(client, config, system_msg, &user_msg).await?,
         other => anyhow::bail!("Unknown LLM provider: {other}"),
     };
 
@@ -71,16 +100,23 @@ struct OllamaChatResponse {
 async fn call_ollama(
     client: &reqwest::Client,
     config: &LlmConfig,
-    prompt: &str,
+    system_msg: &str,
+    user_msg: &str,
 ) -> Result<String> {
     let url = format!("{}/api/chat", config.base_url);
 
     let req = OllamaChatRequest {
         model: config.chat_model.clone(),
-        messages: vec![Message {
-            role: "user".to_string(),
-            content: prompt.to_string(),
-        }],
+        messages: vec![
+            Message {
+                role: "system".to_string(),
+                content: system_msg.to_string(),
+            },
+            Message {
+                role: "user".to_string(),
+                content: user_msg.to_string(),
+            },
+        ],
         stream: false,
     };
 
@@ -134,17 +170,24 @@ struct OpenAiResponseMessage {
 async fn call_openai(
     client: &reqwest::Client,
     config: &LlmConfig,
-    prompt: &str,
+    system_msg: &str,
+    user_msg: &str,
 ) -> Result<String> {
     let url = format!("{}/v1/chat/completions", config.base_url);
     let api_key = config.api_key.as_deref().unwrap_or_default();
 
     let req = OpenAiChatRequest {
         model: config.chat_model.clone(),
-        messages: vec![OpenAiMessage {
-            role: "user".to_string(),
-            content: prompt.to_string(),
-        }],
+        messages: vec![
+            OpenAiMessage {
+                role: "system".to_string(),
+                content: system_msg.to_string(),
+            },
+            OpenAiMessage {
+                role: "user".to_string(),
+                content: user_msg.to_string(),
+            },
+        ],
         temperature: 0.3,
     };
 
