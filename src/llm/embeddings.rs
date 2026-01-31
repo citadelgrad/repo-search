@@ -4,10 +4,12 @@ use serde::{Deserialize, Serialize};
 use crate::config::LlmConfig;
 
 /// Maximum characters to send per text to the embedding API.
-/// nomic-embed-text (Ollama default) has a 2 048-token context; code tokenises
-/// roughly 1 token per 2-3 chars, so 4 000 chars ≈ 1 300–2 000 tokens.
-/// We also pass `truncate: true` to Ollama so it trims at the token boundary.
-const MAX_EMBED_CHARS: usize = 4_000;
+/// nomic-embed-text has an 8 192-token context.  Most code tokenises at
+/// ~1 token per 2-3 chars, but dense content (JSON blobs, minified JS) can
+/// hit ~2.3 tokens/char.  3 000 chars × 2.3 ≈ 6 900 tokens — safely under 8 192.
+/// We also pass `truncate: true` to Ollama, but it has a known bug where it
+/// still returns 400 for inputs that exceed the context length.
+const MAX_EMBED_CHARS: usize = 3_000;
 
 /// Truncate `text` to at most `MAX_EMBED_CHARS`, splitting on a UTF-8 char boundary.
 fn truncate_for_embedding(text: &str) -> &str {

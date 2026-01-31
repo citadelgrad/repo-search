@@ -194,11 +194,14 @@ pub async fn reindex_repo(
         match repo {
             None => return Err((StatusCode::NOT_FOUND, "Repo not found".to_string())),
             Some(r)
-                if !matches!(r.status, RepoStatus::Ready | RepoStatus::Error(_)) =>
+                if !matches!(
+                    r.status,
+                    RepoStatus::Ready | RepoStatus::Error(_) | RepoStatus::Embedding
+                ) =>
             {
                 return Err((
                     StatusCode::CONFLICT,
-                    "Repo must be in ready or error state to re-index".to_string(),
+                    "Repo must be in ready, error, or embedding state to re-index".to_string(),
                 ));
             }
             _ => {}
