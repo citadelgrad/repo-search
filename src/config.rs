@@ -43,7 +43,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             data_dir: PathBuf::from("./data"),
-            bind_addr: "127.0.0.1:7000".to_string(),
+            bind_addr: "127.0.0.1:9000".to_string(),
             llm: LlmConfig::default(),
             max_repos: 50,
             max_concurrent_clones: 2,

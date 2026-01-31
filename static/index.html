@@ -1068,6 +1068,8 @@ async function loadRepos() {
       const statusText = typeof r.status === 'string' ? r.status : `error: ${r.status.error}`;
       const isProcessing = statusText === 'cloning' || statusText === 'indexing' || statusText === 'embedding';
       const isReady = statusText === 'ready';
+      const isError = statusClass === 'error';
+      const canReindex = isReady || isError;
       return `
         <div class="repo-card">
           <div class="info">
@@ -1079,7 +1081,7 @@ async function loadRepos() {
             </div>
           </div>
           <span class="status-badge ${esc(statusClass)}">${isProcessing ? '<span class="spinner"></span>' : ''}${esc(statusText)}</span>
-          ${isReady ? `<button class="reindex-btn" onclick="reindexRepo('${r.id}')">Re-index</button>` : ''}
+          ${canReindex ? `<button class="reindex-btn" onclick="reindexRepo('${r.id}')">Re-index</button>` : ''}
           <button class="delete-btn" onclick="deleteRepo('${r.id}')">Delete</button>
         </div>
       `;

@@ -182,7 +182,7 @@ cargo build --release
 ./target/release/repo-search
 ```
 
-The server starts on `http://localhost:7000`.
+The server starts on `http://localhost:9000`.
 
 ### Run Tests
 
@@ -205,7 +205,7 @@ cargo test
 | Variable | Default | Description |
 |---|---|---|
 | `REPO_SEARCH_DATA_DIR` | `./data` | Where repos and indexes are stored |
-| `REPO_SEARCH_BIND_ADDR` | `127.0.0.1:7000` | Server bind address (localhost only by default) |
+| `REPO_SEARCH_BIND_ADDR` | `127.0.0.1:9000` | Server bind address (localhost only by default) |
 | `LLM_PROVIDER` | `ollama` | `ollama` or `openai` |
 | `LLM_BASE_URL` | `http://localhost:11434` | LLM API base URL |
 | `LLM_CHAT_MODEL` | `llama3.2` | Model for re-ranking & query expansion |

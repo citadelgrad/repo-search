@@ -187,16 +187,18 @@ pub async fn reindex_repo(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    // Validate repo exists and is Ready
+    // Validate repo exists and is in a re-indexable state (Ready or Error)
     {
         let repos = state.repos.read();
         let repo = repos.iter().find(|r| r.id == id);
         match repo {
             None => return Err((StatusCode::NOT_FOUND, "Repo not found".to_string())),
-            Some(r) if r.status != RepoStatus::Ready => {
+            Some(r)
+                if !matches!(r.status, RepoStatus::Ready | RepoStatus::Error(_)) =>
+            {
                 return Err((
                     StatusCode::CONFLICT,
-                    "Repo must be in ready state to re-index".to_string(),
+                    "Repo must be in ready or error state to re-index".to_string(),
                 ));
             }
             _ => {}
