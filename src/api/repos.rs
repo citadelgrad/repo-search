@@ -82,8 +82,10 @@ pub async fn add_repo(
     let repo_id = repo.id;
     let state_clone = state.clone();
     tokio::spawn(async move {
+        let err_state = state_clone.clone();
         if let Err(e) = clone_and_index(state_clone, repo_id, &url, &name).await {
             tracing::error!("Failed to clone and index {url}: {e:#}");
+            update_repo_status(&err_state, repo_id, RepoStatus::Error(format!("{e:#}")));
         }
     });
 
@@ -215,8 +217,10 @@ pub async fn reindex_repo(
     // Spawn background task
     let state_clone = state.clone();
     tokio::spawn(async move {
+        let err_state = state_clone.clone();
         if let Err(e) = reindex_embeddings(state_clone, id).await {
             tracing::error!("Failed to re-index embeddings for {id}: {e:#}");
+            update_repo_status(&err_state, id, RepoStatus::Error(format!("{e:#}")));
         }
     });
 
@@ -367,8 +371,10 @@ pub async fn sync_repo(
     let repo_name = repo.name.clone();
     let old_head = repo.head_commit.clone();
     tokio::spawn(async move {
+        let err_state = state_clone.clone();
         if let Err(e) = sync_and_reindex(state_clone, id, &repo_url, &repo_name, old_head).await {
             tracing::error!("Failed to sync {repo_name}: {e:#}");
+            update_repo_status(&err_state, id, RepoStatus::Error(format!("{e:#}")));
         }
     });
 

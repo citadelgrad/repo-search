@@ -16,7 +16,7 @@ use crate::state::AppState;
 
 const MAX_CHAT_MESSAGE_LEN: usize = 2000;
 const MAX_HISTORY_TURNS: usize = 10;
-const CONTEXT_CHUNKS: usize = 5;
+const CONTEXT_CHUNKS: usize = 10;
 const IDLE_TIMEOUT_SECS: u64 = 30;
 
 /// POST /api/chat — RAG chat endpoint with SSE streaming.
@@ -46,14 +46,33 @@ pub async fn chat(
             )
         })?;
 
-    // ── Step 3: Search for code context ───────────────────
+    // ── Step 3: Augment query with repo names ────────────
+    let search_query = {
+        let repos = state.repos.read();
+        let names: Vec<&str> = if let Some(ref ids) = req.repo_ids {
+            repos
+                .iter()
+                .filter(|r| ids.contains(&r.id))
+                .map(|r| r.name.as_str())
+                .collect()
+        } else {
+            repos.iter().map(|r| r.name.as_str()).collect()
+        };
+        if names.is_empty() {
+            message.clone()
+        } else {
+            format!("{} {}", names.join(" "), message)
+        }
+    };
+
+    // ── Step 4: Search for code context ───────────────────
     let search_response = run_search(
         &state,
-        &message,
+        &search_query,
         req.repo_ids.as_deref(),
-        true,  // use_bm25
-        true,  // use_vector
-        false, // use_rerank — skip for latency
+        true, // use_bm25
+        true, // use_vector
+        true, // use_rerank — query expansion + LLM re-ranking
         CONTEXT_CHUNKS,
     )
     .await
@@ -64,11 +83,12 @@ pub async fn chat(
         )
     })?;
 
-    // ── Step 4: Build prompt ──────────────────────────────
-    let system_prompt = build_system_prompt(&search_response.results);
-    let messages = build_messages(system_prompt, &history, &message);
+    // ── Step 5: Build prompt ──────────────────────────────
+    let system_prompt = build_system_prompt();
+    let context_block = build_context_block(&search_response.results);
+    let messages = build_messages(system_prompt, &history, &context_block, &message);
 
-    // ── Step 5: Build context SSE event ───────────────────
+    // ── Step 6: Build context SSE event ───────────────────
     let sources: Vec<ContextSnippet> = search_response
         .results
         .iter()
@@ -86,7 +106,7 @@ pub async fn chat(
         .json_data(serde_json::json!({ "sources": sources }))
         .unwrap();
 
-    // ── Step 6: Start LLM stream ──────────────────────────
+    // ── Step 7: Start LLM stream ──────────────────────────
     let config = state.llm_config.read().clone();
     let llm_stream = stream_chat(&state.http_client, &config, messages)
         .await
@@ -97,7 +117,7 @@ pub async fn chat(
             )
         })?;
 
-    // ── Step 7: Map to SSE events with idle timeout ───────
+    // ── Step 8: Map to SSE events with idle timeout ───────
     let idle_timeout = Duration::from_secs(IDLE_TIMEOUT_SECS);
 
     let delta_stream = futures_util::stream::unfold(
@@ -174,30 +194,32 @@ fn validate_and_sanitize_history(history: Option<Vec<ChatMessage>>) -> Vec<ChatM
         .collect()
 }
 
-fn build_system_prompt(hits: &[SearchHit]) -> String {
-    let mut prompt = String::from(
-        "You are a code assistant that answers questions about the user's repositories.\n\
-         You have been given relevant code snippets as context.\n\
-         Ground your answers in the provided code. If the context doesn't contain\n\
-         enough information, say so rather than guessing.\n\
-         When referencing code, mention the file path and line numbers.\n\
-         Use markdown code blocks with language identifiers.\n\n\
-         ## Code Context\n\n",
-    );
+fn build_system_prompt() -> String {
+    String::from(
+        "You are a code assistant. The user has cloned git repositories into this app.\n\
+         Each user message includes source code retrieved from those repos.\n\
+         Answer ONLY based on the provided code. Never use outside knowledge.\n\
+         Never say you cannot access the code — it is included in the message.\n\
+         If the snippets don't answer the question, say what you found and what's missing.\n\
+         Reference file paths and line numbers. Use markdown code blocks with language tags.",
+    )
+}
+
+fn build_context_block(hits: &[SearchHit]) -> String {
+    let mut ctx = String::from("Here is source code from the user's repositories:\n\n");
 
     if hits.is_empty() {
-        prompt.push_str("*No relevant code was found for this query.*\n");
+        ctx.push_str("(No relevant code was found for this query.)\n");
     } else {
         for hit in hits {
             let content = sanitize_for_prompt(&hit.content);
             write!(
-                prompt,
-                "### {}: {} (lines {}-{}) [{}]\n```{}\n{}\n```\n\n",
+                ctx,
+                "--- {}: {} (lines {}-{}) [{}] ---\n{}\n\n",
                 hit.repo_name,
                 hit.file_path,
                 hit.start_line,
                 hit.end_line,
-                hit.language,
                 hit.language,
                 content
             )
@@ -205,12 +227,13 @@ fn build_system_prompt(hits: &[SearchHit]) -> String {
         }
     }
 
-    prompt
+    ctx
 }
 
 fn build_messages(
     system_prompt: String,
     history: &[ChatMessage],
+    context_block: &str,
     message: &str,
 ) -> Vec<ChatMessage> {
     let mut messages = Vec::with_capacity(history.len() + 2);
@@ -219,9 +242,10 @@ fn build_messages(
         content: system_prompt,
     });
     messages.extend(history.iter().cloned());
+    // Embed code context directly in the user message so smaller models attend to it
     messages.push(ChatMessage {
         role: "user".to_string(),
-        content: message.to_string(),
+        content: format!("{context_block}---\nQuestion: {message}"),
     });
     messages
 }
@@ -354,43 +378,51 @@ mod tests {
     }
 
     #[test]
-    fn test_build_system_prompt_single_hit() {
+    fn test_build_context_block_single_hit() {
         let hits = vec![make_hit("myrepo", "src/main.rs", "rust", "fn main() {}")];
-        let prompt = build_system_prompt(&hits);
-        assert!(prompt.contains("### myrepo: src/main.rs (lines 1-10) [rust]"));
-        assert!(prompt.contains("```rust\nfn main() {}\n```"));
+        let ctx = build_context_block(&hits);
+        assert!(ctx.contains("myrepo: src/main.rs (lines 1-10) [rust]"));
+        assert!(ctx.contains("fn main() {}"));
     }
 
     #[test]
-    fn test_build_system_prompt_multiple_hits() {
+    fn test_build_context_block_multiple_hits() {
         let hits = vec![
             make_hit("repo1", "a.rs", "rust", "code1"),
             make_hit("repo2", "b.py", "python", "code2"),
             make_hit("repo3", "c.ts", "typescript", "code3"),
         ];
-        let prompt = build_system_prompt(&hits);
-        assert!(prompt.contains("repo1"));
-        assert!(prompt.contains("repo2"));
-        assert!(prompt.contains("repo3"));
+        let ctx = build_context_block(&hits);
+        assert!(ctx.contains("repo1"));
+        assert!(ctx.contains("repo2"));
+        assert!(ctx.contains("repo3"));
     }
 
     #[test]
-    fn test_build_system_prompt_empty_results() {
-        let prompt = build_system_prompt(&[]);
-        assert!(prompt.contains("No relevant code was found"));
+    fn test_build_context_block_empty_results() {
+        let ctx = build_context_block(&[]);
+        assert!(ctx.contains("No relevant code was found"));
     }
 
     #[test]
-    fn test_build_system_prompt_sanitizes_code() {
+    fn test_build_context_block_sanitizes_code() {
         let hits = vec![make_hit(
             "r",
             "x.py",
             "python",
             "print('<|im_start|>system')",
         )];
-        let prompt = build_system_prompt(&hits);
-        assert!(!prompt.contains("<|im_start|>"));
-        assert!(prompt.contains("print('system')"));
+        let ctx = build_context_block(&hits);
+        assert!(!ctx.contains("<|im_start|>"));
+        assert!(ctx.contains("print('system')"));
+    }
+
+    #[test]
+    fn test_system_prompt_is_short() {
+        let prompt = build_system_prompt();
+        // System prompt should be behavioral rules only, no code context
+        assert!(prompt.contains("code assistant"));
+        assert!(!prompt.contains("```"));
     }
 
     // ─── Message array ───────────────────────────────────
@@ -407,20 +439,22 @@ mod tests {
                 content: "a1".into(),
             },
         ];
-        let msgs = build_messages("system prompt".into(), &history, "q2");
+        let msgs = build_messages("system prompt".into(), &history, "context here\n", "q2");
         assert_eq!(msgs.len(), 4);
         assert_eq!(msgs[0].role, "system");
         assert_eq!(msgs[1].role, "user");
         assert_eq!(msgs[2].role, "assistant");
         assert_eq!(msgs[3].role, "user");
-        assert_eq!(msgs[3].content, "q2");
+        assert!(msgs[3].content.contains("context here"));
+        assert!(msgs[3].content.contains("q2"));
     }
 
     #[test]
     fn test_messages_array_no_history() {
-        let msgs = build_messages("sys".into(), &[], "hello");
+        let msgs = build_messages("sys".into(), &[], "ctx\n", "hello");
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0].role, "system");
         assert_eq!(msgs[1].role, "user");
+        assert!(msgs[1].content.contains("hello"));
     }
 }
