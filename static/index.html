@@ -644,6 +644,27 @@
   .chat-msg-content p { margin: 8px 0; }
   .chat-msg-content p:first-child { margin-top: 0; }
   .chat-msg-content ul, .chat-msg-content ol { padding-left: 20px; margin: 8px 0; }
+  .code-copy-btn {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+  pre:hover .code-copy-btn {
+    opacity: 1;
+  }
+  .code-copy-btn:hover {
+    color: var(--text);
+    border-color: var(--text-muted);
+  }
   .chat-msg-error {
     background: rgba(248, 81, 73, 0.1);
     border: 1px solid var(--red);
@@ -653,7 +674,11 @@
     margin-top: 8px;
   }
   .chat-sources {
-    margin-top: 8px;
+    margin: 0 0 8px 0;
+    padding: 8px 12px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
     font-size: 13px;
   }
   .chat-sources-toggle {
@@ -696,6 +721,10 @@
   .chat-input-area button:hover {
     background: var(--accent);
   }
+  .chat-input-area button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
   #chat-input {
     flex: 1;
     background: var(--bg2);
@@ -719,6 +748,21 @@
   .chat-new-btn:hover {
     color: var(--text) !important;
     border-color: var(--text-muted) !important;
+  }
+  .chat-input-hint {
+    font-size: 11px;
+    color: var(--text-muted);
+    padding: 2px 0 0;
+    width: 100%;
+    opacity: 0.7;
+  }
+  .chat-input-hint kbd {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 0 4px;
+    font-family: var(--font-mono);
+    font-size: 10px;
   }
   .chat-typing {
     color: var(--text-muted);
@@ -855,6 +899,7 @@
         <textarea id="chat-input" placeholder="Ask a question about your code..." rows="1" aria-label="Chat message input"></textarea>
         <button onclick="sendChatMessage()" aria-label="Send message (Enter)">Send</button>
         <button onclick="clearChat()" class="chat-new-btn" aria-label="Start new chat conversation">New Chat</button>
+        <div class="chat-input-hint"><kbd>Enter</kbd> to send, <kbd>Shift+Enter</kbd> for new line</div>
       </div>
     </div>
   </div>
@@ -2738,6 +2783,23 @@ document.getElementById('chat-input').addEventListener('input', function() {
   this.style.overflowY = this.scrollHeight > 120 ? 'auto' : 'hidden';
 });
 
+function setChatStreamingState(streaming) {
+  const sendBtn = document.querySelector('.chat-input-area button:first-of-type');
+  const input = document.getElementById('chat-input');
+  if (streaming) {
+    sendBtn.textContent = 'Stop';
+    sendBtn.setAttribute('aria-label', 'Stop generating');
+    sendBtn.onclick = function() { if (currentAbortController) currentAbortController.abort(); };
+    input.disabled = true;
+  } else {
+    sendBtn.textContent = 'Send';
+    sendBtn.setAttribute('aria-label', 'Send message (Enter)');
+    sendBtn.onclick = sendChatMessage;
+    input.disabled = false;
+    input.focus();
+  }
+}
+
 function clearChat() {
   chatHistory = [];
   if (currentAbortController) {
@@ -2793,9 +2855,20 @@ function renderChatMarkdown(msgDiv, text) {
   contentDiv.querySelectorAll('pre code').forEach(el => {
     hljs.highlightElement(el);
   });
-  // Re-append sources if they exist
-  const sources = msgDiv._sourcesEl;
-  if (sources) contentDiv.appendChild(sources);
+  contentDiv.querySelectorAll('pre').forEach(pre => {
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'code-copy-btn';
+    copyBtn.textContent = 'Copy';
+    copyBtn.addEventListener('click', () => {
+      const code = pre.querySelector('code');
+      navigator.clipboard.writeText(code ? code.textContent : pre.textContent).then(() => {
+        copyBtn.textContent = 'Copied!';
+        setTimeout(() => { copyBtn.textContent = 'Copy'; }, 2000);
+      });
+    });
+    pre.style.position = 'relative';
+    pre.appendChild(copyBtn);
+  });
   const container = document.getElementById('chat-messages');
   container.scrollTop = container.scrollHeight;
 }
@@ -2813,14 +2886,15 @@ function scheduleChatRender(msgDiv, text) {
 function renderSources(msgDiv, sources) {
   if (!sources || sources.length === 0) return;
   const wrapper = document.createElement('div');
-  wrapper.className = 'chat-sources';
+  wrapper.className = 'chat-sources expanded';
   const toggle = document.createElement('button');
   toggle.className = 'chat-sources-toggle';
-  toggle.textContent = '\u25B6 Sources (' + sources.length + ' file' + (sources.length !== 1 ? 's' : '') + ')';
-  toggle.setAttribute('aria-expanded', 'false');
+  toggle.textContent = '\u25BC Sources (' + sources.length + ' file' + (sources.length !== 1 ? 's' : '') + ')';
+  toggle.setAttribute('aria-expanded', 'true');
   toggle.addEventListener('click', () => {
     const expanded = wrapper.classList.toggle('expanded');
     toggle.setAttribute('aria-expanded', String(expanded));
+    toggle.textContent = (expanded ? '\u25BC' : '\u25B6') + ' Sources (' + sources.length + ' file' + (sources.length !== 1 ? 's' : '') + ')';
   });
   const list = document.createElement('div');
   list.className = 'chat-sources-list';
@@ -2833,7 +2907,8 @@ function renderSources(msgDiv, sources) {
   wrapper.appendChild(toggle);
   wrapper.appendChild(list);
   msgDiv._sourcesEl = wrapper;
-  msgDiv.querySelector('.chat-msg-content').appendChild(wrapper);
+  const contentDiv = msgDiv.querySelector('.chat-msg-content');
+  msgDiv.insertBefore(wrapper, contentDiv);
 }
 
 function showChatError(msgDiv, message) {
@@ -2846,12 +2921,15 @@ function showChatError(msgDiv, message) {
 }
 
 async function sendChatMessage() {
+  if (currentAbortController) return; // Already streaming
+
   const input = document.getElementById('chat-input');
   const message = input.value.trim();
   if (!message) return;
 
   input.value = '';
   input.style.height = 'auto';
+  setChatStreamingState(true);
   appendUserMessage(message);
 
   const body = {
@@ -2930,6 +3008,7 @@ async function sendChatMessage() {
     }
   } finally {
     currentAbortController = null;
+    setChatStreamingState(false);
   }
 }
 
