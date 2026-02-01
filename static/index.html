@@ -2505,19 +2505,169 @@ function showMoreRegions(btn) {
   btn.remove();
 }
 
-// ── Navigation ───────────────────────────────────
+// ── sessionStorage Utilities ─────────────────────
+function ssSet(key, val) {
+  try { sessionStorage.setItem(key, JSON.stringify(val)); } catch (e) { /* quota exceeded or disabled */ }
+}
+function ssGet(key) {
+  try { const v = sessionStorage.getItem(key); return v ? JSON.parse(v) : null; } catch (e) { return null; }
+}
+function ssRemove(key) {
+  try { sessionStorage.removeItem(key); } catch (e) { /* ignore */ }
+}
+
+// ── Session Persistence: Save ────────────────────
+function saveChatState() {
+  ssSet('chat_history', chatHistory);
+  const msgEl = document.getElementById('chat-messages');
+  const html = msgEl ? msgEl.innerHTML : '';
+  // Guard against oversized DOM snapshots (2MB limit)
+  if (html.length < 2 * 1024 * 1024) {
+    ssSet('chat_dom', html);
+  } else {
+    ssRemove('chat_dom');
+  }
+}
+
+function saveRepoFilter() {
+  ssSet('selected_repo_ids', Array.from(selectedRepoIds));
+}
+
+function saveSearchQuery() {
+  const q = document.getElementById('search-input').value.trim();
+  ssSet('search_query', q);
+}
+
+// ── URL Routing ──────────────────────────────────
+const PAGE_ROUTES = { search: '/', repos: '/repos', chat: '/chat', settings: '/settings' };
+const ROUTE_PAGES = { '/': 'search', '/repos': 'repos', '/chat': 'chat', '/settings': 'settings' };
+
+function getPageFromPath() {
+  return ROUTE_PAGES[window.location.pathname] || 'search';
+}
+
+function navigateTo(page, { pushState = true, restoreState = false } = {}) {
+  // DOM toggle
+  document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  const btn = document.querySelector(`nav button[data-page="${page}"]`);
+  if (btn) btn.classList.add('active');
+  document.getElementById('page-' + page).classList.add('active');
+
+  // Push URL
+  if (pushState) {
+    const url = PAGE_ROUTES[page] || '/';
+    if (window.location.pathname !== url) {
+      history.pushState({ page }, '', url);
+    }
+  }
+
+  // Page-specific loading
+  if (page === 'repos') loadRepos();
+  if (page === 'settings') loadConfig();
+  if (page === 'search') {
+    refreshRepoFilter();
+    if (restoreState) restoreSearchState();
+  }
+  if (page === 'chat') {
+    refreshRepoFilter();
+    if (restoreState) restoreChatState();
+  }
+}
+
+// Back/forward button support
+window.addEventListener('popstate', (e) => {
+  const page = (e.state && e.state.page) || getPageFromPath();
+  navigateTo(page, { pushState: false });
+});
+
+// Nav button click handlers
 document.querySelectorAll('nav button').forEach(btn => {
   btn.addEventListener('click', () => {
-    document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
-    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-    btn.classList.add('active');
-    document.getElementById('page-' + btn.dataset.page).classList.add('active');
-    if (btn.dataset.page === 'repos') loadRepos();
-    if (btn.dataset.page === 'settings') loadConfig();
-    if (btn.dataset.page === 'search') refreshRepoFilter();
-    if (btn.dataset.page === 'chat') refreshRepoFilter();
+    navigateTo(btn.dataset.page);
   });
 });
+
+// ── Session Persistence: Restore ─────────────────
+function restoreRepoFilter() {
+  const saved = ssGet('selected_repo_ids');
+  if (saved && Array.isArray(saved)) {
+    selectedRepoIds = new Set(saved);
+  }
+}
+
+function restoreChatState() {
+  const history = ssGet('chat_history');
+  const dom = ssGet('chat_dom');
+  if (!history || history.length === 0) return;
+
+  chatHistory = history;
+  const msgEl = document.getElementById('chat-messages');
+  const emptyState = document.getElementById('chat-empty');
+
+  if (dom) {
+    // Restore from sanitized DOM snapshot (includes sources, copy buttons, formatting)
+    // DOMPurify.sanitize prevents XSS from any tampered sessionStorage content
+    msgEl.innerHTML = DOMPurify.sanitize(dom);
+    if (emptyState) emptyState.style.display = 'none';
+    // Re-attach copy button listeners (event handlers lost on innerHTML set)
+    reattachCopyButtons(msgEl);
+    // Re-attach sources toggle listeners
+    reattachSourcesToggle(msgEl);
+  } else {
+    // Fallback: re-render from chat history
+    rerenderChatFromHistory();
+  }
+}
+
+function rerenderChatFromHistory() {
+  const msgEl = document.getElementById('chat-messages');
+  const emptyState = document.getElementById('chat-empty');
+  msgEl.textContent = '';
+  if (emptyState) emptyState.style.display = 'none';
+  for (const msg of chatHistory) {
+    if (msg.role === 'user') {
+      appendUserMessage(msg.content);
+    } else if (msg.role === 'assistant') {
+      const div = createAssistantMessage();
+      renderChatMarkdown(div, msg.content);
+    }
+  }
+}
+
+function reattachCopyButtons(container) {
+  container.querySelectorAll('.code-copy-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const pre = btn.closest('pre');
+      const code = pre.querySelector('code');
+      navigator.clipboard.writeText(code ? code.textContent : pre.textContent).then(() => {
+        btn.textContent = 'Copied!';
+        setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
+      });
+    });
+  });
+}
+
+function reattachSourcesToggle(container) {
+  container.querySelectorAll('.chat-sources-toggle').forEach(toggle => {
+    toggle.addEventListener('click', () => {
+      const wrapper = toggle.closest('.chat-sources');
+      const expanded = wrapper.classList.toggle('expanded');
+      toggle.setAttribute('aria-expanded', String(expanded));
+      const countMatch = toggle.textContent.match(/\d+ files?/);
+      const countText = countMatch ? countMatch[0] : 'files';
+      toggle.textContent = (expanded ? '\u25BC' : '\u25B6') + ' Sources (' + countText + ')';
+    });
+  });
+}
+
+function restoreSearchState() {
+  const q = ssGet('search_query');
+  if (q) {
+    document.getElementById('search-input').value = q;
+    doSearch();
+  }
+}
 
 // ── Repo Filter ──────────────────────────────────
 async function refreshRepoFilter() {
@@ -2577,6 +2727,7 @@ function toggleRepoChip(id) {
     selectedRepoIds.add(id);
   }
   renderRepoChips();
+  saveRepoFilter();
 }
 
 function selectAllRepos() {
@@ -2584,11 +2735,13 @@ function selectAllRepos() {
     if (r.status === 'ready') selectedRepoIds.add(r.id);
   });
   renderRepoChips();
+  saveRepoFilter();
 }
 
 function selectNoRepos() {
   selectedRepoIds.clear();
   renderRepoChips();
+  saveRepoFilter();
 }
 
 function getSelectedRepoIds() {
@@ -2605,6 +2758,7 @@ document.getElementById('search-input').addEventListener('keydown', e => {
 async function doSearch() {
   const query = document.getElementById('search-input').value.trim();
   if (!query) return;
+  saveSearchQuery();
 
   const useBm25 = document.getElementById('opt-bm25').checked;
   const useVector = document.getElementById('opt-vector').checked;
@@ -2778,6 +2932,7 @@ async function deleteRepo(id) {
   try {
     await fetch(API + `/api/repos/${id}`, { method: 'DELETE' });
     selectedRepoIds.delete(id);
+    saveRepoFilter();
     toast('Repository deleted');
     loadRepos();
     refreshRepoFilter();
@@ -2934,6 +3089,7 @@ function clearChat() {
   const emptyState = document.getElementById('chat-empty');
   if (emptyState) emptyState.style.display = '';
   document.getElementById('chat-input').focus();
+  saveChatState();
 }
 
 function appendUserMessage(text) {
@@ -3083,6 +3239,7 @@ async function sendChatMessage() {
   };
 
   chatHistory.push({ role: 'user', content: message });
+  saveChatState();
 
   const assistantDiv = createAssistantMessage();
   let fullContent = '';
@@ -3145,6 +3302,7 @@ async function sendChatMessage() {
     if (fullContent) {
       renderChatMarkdown(assistantDiv, fullContent);
       chatHistory.push({ role: 'assistant', content: fullContent });
+      saveChatState();
     }
   } catch (e) {
     if (e.name !== 'AbortError') {
@@ -3170,9 +3328,22 @@ function toast(msg) {
   setTimeout(() => el.classList.remove('show'), 3000);
 }
 
-// Initial load
-loadRepos();
-refreshRepoFilter();
+// ── Initialization ───────────────────────────────
+function initRouter() {
+  // Restore repo filter selection before any page loads
+  restoreRepoFilter();
+
+  // Determine which page to show from the URL
+  const page = getPageFromPath();
+
+  // Replace current history entry with proper state (so popstate works from first entry)
+  history.replaceState({ page }, '', window.location.pathname);
+
+  // Navigate to the correct page, restoring state if available
+  navigateTo(page, { pushState: false, restoreState: true });
+}
+
+initRouter();
 </script>
 </body>
 </html>

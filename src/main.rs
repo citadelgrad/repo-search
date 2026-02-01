@@ -37,7 +37,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/chat", post(api::chat::chat))
         .route("/api/config", get(api::repos::get_config))
         .route("/api/config", put(api::repos::update_config))
-        .with_state(state);
+        .with_state(state)
+        .fallback(get(serve_index));
 
     let listener = tokio::net::TcpListener::bind(&config.bind_addr).await?;
     tracing::info!("Server listening on {}", config.bind_addr);
