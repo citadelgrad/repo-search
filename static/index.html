@@ -458,6 +458,22 @@
     border-color: var(--red);
   }
 
+  .repo-card .sync-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--green, #4ade80);
+    padding: 6px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+  }
+
+  .repo-card .sync-btn:hover {
+    background: rgba(74, 222, 128, 0.1);
+    border-color: var(--green, #4ade80);
+    color: #fff;
+  }
+
   .repo-card .reindex-btn {
     background: transparent;
     border: 1px solid var(--border);
@@ -2693,6 +2709,7 @@ async function loadRepos() {
       const isReady = statusText === 'ready';
       const isError = statusClass === 'error';
       const canReindex = isReady || isError;
+      const canSync = isReady || isError;
       return `
         <div class="repo-card">
           <div class="info">
@@ -2700,10 +2717,11 @@ async function loadRepos() {
             <div class="url">${esc(r.url)}</div>
             <div class="meta">
               ${r.file_count} files | Added ${new Date(r.added_at).toLocaleDateString()}
-              ${r.indexed_at ? ' | Indexed ' + new Date(r.indexed_at).toLocaleDateString() : ''}
+              ${r.indexed_at ? ' | Indexed ' + timeAgo(r.indexed_at) : ''}
             </div>
           </div>
           <span class="status-badge ${esc(statusClass)}">${isProcessing ? '<span class="spinner"></span>' : ''}${esc(statusText)}</span>
+          ${canSync ? `<button class="sync-btn" onclick="syncRepo('${r.id}')">Sync</button>` : ''}
           ${canReindex ? `<button class="reindex-btn" onclick="reindexRepo('${r.id}')">Re-index</button>` : ''}
           <button class="delete-btn" onclick="deleteRepo('${r.id}')">Delete</button>
         </div>
@@ -2872,6 +2890,9 @@ function useSuggestion(btn) {
 }
 
 function clearChat() {
+  if (chatHistory.length > 0) {
+    if (!confirm('Start a new chat? Current conversation will be cleared.')) return;
+  }
   chatHistory = [];
   if (currentAbortController) {
     currentAbortController.abort();
