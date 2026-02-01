@@ -730,6 +730,7 @@
   .chat-source-item { padding: 2px 0; }
   .chat-input-area {
     display: flex;
+    flex-wrap: wrap;
     gap: 8px;
     padding: 12px 0;
     border-top: 1px solid var(--border);
@@ -847,7 +848,6 @@
   @media (max-width: 640px) {
     .chat-msg-user { margin-left: 5%; max-width: 95%; }
     .chat-msg-assistant { margin-right: 2%; }
-    .chat-input-area { flex-wrap: wrap; }
     .chat-new-btn { width: 100%; text-align: center; margin-top: 4px; }
     .chat-sources-list { font-size: 11px; }
   }
