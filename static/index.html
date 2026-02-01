@@ -673,6 +673,19 @@
     border-radius: 6px;
     margin-top: 8px;
   }
+  .chat-retry-btn {
+    margin-left: 12px;
+    background: none;
+    border: 1px solid var(--red);
+    color: var(--red);
+    padding: 2px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+  }
+  .chat-retry-btn:hover {
+    background: rgba(248, 81, 73, 0.1);
+  }
   .chat-sources {
     margin: 0 0 8px 0;
     padding: 8px 12px;
@@ -771,6 +784,48 @@
     display: flex;
     align-items: center;
     gap: 8px;
+  }
+
+  .chat-empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    flex: 1;
+    text-align: center;
+    color: var(--text-muted);
+    padding: 40px 20px;
+  }
+  .chat-empty-state h3 {
+    font-size: 18px;
+    color: var(--text);
+    margin-bottom: 8px;
+  }
+  .chat-empty-state p {
+    max-width: 400px;
+    margin-bottom: 24px;
+  }
+  .chat-suggestions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-width: 400px;
+    width: 100%;
+  }
+  .chat-suggestion {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    padding: 10px 16px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 13px;
+    text-align: left;
+    transition: border-color 0.15s, color 0.15s;
+  }
+  .chat-suggestion:hover {
+    border-color: var(--accent);
+    color: var(--text);
   }
 
   @media (max-width: 640px) {
@@ -894,6 +949,16 @@
       </div>
     </div>
     <div class="chat-container">
+      <div id="chat-empty" class="chat-empty-state">
+        <h3>Ask questions about your code</h3>
+        <p>Chat uses your indexed repositories as context to answer questions with full source references.</p>
+        <div class="chat-suggestions">
+          <button class="chat-suggestion" onclick="useSuggestion(this)">How is authentication handled?</button>
+          <button class="chat-suggestion" onclick="useSuggestion(this)">Explain the main entry point</button>
+          <button class="chat-suggestion" onclick="useSuggestion(this)">Where are API routes defined?</button>
+          <button class="chat-suggestion" onclick="useSuggestion(this)">What error handling patterns are used?</button>
+        </div>
+      </div>
       <div id="chat-messages" class="chat-messages" role="log" aria-live="polite" aria-label="Chat messages"></div>
       <div class="chat-input-area">
         <textarea id="chat-input" placeholder="Ask a question about your code..." rows="1" aria-label="Chat message input"></textarea>
@@ -2769,6 +2834,7 @@ async function saveConfig() {
 let chatHistory = [];
 let currentAbortController = null;
 let chatRenderPending = false;
+let lastSentMessage = '';
 
 document.getElementById('chat-input').addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) {
@@ -2800,6 +2866,11 @@ function setChatStreamingState(streaming) {
   }
 }
 
+function useSuggestion(btn) {
+  document.getElementById('chat-input').value = btn.textContent;
+  sendChatMessage();
+}
+
 function clearChat() {
   chatHistory = [];
   if (currentAbortController) {
@@ -2807,9 +2878,14 @@ function clearChat() {
     currentAbortController = null;
   }
   document.getElementById('chat-messages').textContent = '';
+  const emptyState = document.getElementById('chat-empty');
+  if (emptyState) emptyState.style.display = '';
+  document.getElementById('chat-input').focus();
 }
 
 function appendUserMessage(text) {
+  const emptyState = document.getElementById('chat-empty');
+  if (emptyState) emptyState.style.display = 'none';
   const container = document.getElementById('chat-messages');
   const div = document.createElement('div');
   div.className = 'chat-msg chat-msg-user';
@@ -2916,7 +2992,21 @@ function showChatError(msgDiv, message) {
   if (typingEl) typingEl.remove();
   const errDiv = document.createElement('div');
   errDiv.className = 'chat-msg-error';
-  errDiv.textContent = message;
+  const errText = document.createElement('span');
+  errText.textContent = message;
+  errDiv.appendChild(errText);
+  const retryBtn = document.createElement('button');
+  retryBtn.className = 'chat-retry-btn';
+  retryBtn.textContent = 'Retry';
+  retryBtn.addEventListener('click', () => {
+    msgDiv.remove();
+    if (chatHistory.length && chatHistory[chatHistory.length - 1].role === 'user') {
+      chatHistory.pop();
+    }
+    document.getElementById('chat-input').value = lastSentMessage;
+    sendChatMessage();
+  });
+  errDiv.appendChild(retryBtn);
   msgDiv.querySelector('.chat-msg-content').appendChild(errDiv);
 }
 
@@ -2927,6 +3017,7 @@ async function sendChatMessage() {
   const message = input.value.trim();
   if (!message) return;
 
+  lastSentMessage = message;
   input.value = '';
   input.style.height = 'auto';
   setChatStreamingState(true);
