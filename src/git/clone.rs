@@ -266,6 +266,65 @@ fn detect_language(path: &Path) -> String {
     .to_string()
 }
 
+/// Fetch latest commits and hard-reset to origin/HEAD.
+///
+/// Returns the new HEAD commit SHA. The `stored_url` is used to override the
+/// remote URL in `.git/config` before fetching (SSRF prevention).
+pub fn pull_repo(repo_dir: &Path, stored_url: &str, git_token: Option<&str>) -> Result<String> {
+    let repo =
+        git2::Repository::open(repo_dir).with_context(|| "Failed to open git repository")?;
+
+    // SSRF prevention: always set remote URL from our stored value
+    repo.remote_set_url("origin", stored_url)
+        .with_context(|| "Failed to set remote URL")?;
+
+    let mut remote = repo
+        .find_remote("origin")
+        .with_context(|| "Failed to find remote 'origin'")?;
+
+    let mut fo = git2::FetchOptions::new();
+    if let Some(token) = git_token {
+        let token = token.to_string();
+        let mut callbacks = git2::RemoteCallbacks::new();
+        callbacks.credentials(move |_url, _username, _allowed| {
+            git2::Cred::userpass_plaintext("x-access-token", &token)
+        });
+        fo.remote_callbacks(callbacks);
+    }
+
+    remote
+        .fetch(&["HEAD"], Some(&mut fo), None)
+        .with_context(|| "Failed to fetch from remote")?;
+
+    let fetch_head = repo
+        .find_reference("FETCH_HEAD")
+        .with_context(|| "Failed to find FETCH_HEAD")?;
+    let fetch_commit = repo
+        .reference_to_annotated_commit(&fetch_head)
+        .with_context(|| "Failed to resolve FETCH_HEAD")?;
+    let new_head = fetch_commit.id().to_string();
+
+    let object = repo
+        .find_object(fetch_commit.id(), None)
+        .with_context(|| "Failed to find fetched commit object")?;
+    repo.reset(&object, git2::ResetType::Hard, None)
+        .with_context(|| "Failed to reset to fetched HEAD")?;
+
+    tracing::info!("Pull complete: {} -> {}", repo_dir.display(), &new_head[..8]);
+    Ok(new_head)
+}
+
+/// Read the HEAD commit SHA from a git repository.
+pub fn head_commit_sha(repo_dir: &Path) -> Result<String> {
+    let repo =
+        git2::Repository::open(repo_dir).with_context(|| "Failed to open git repository")?;
+    let head = repo.head().with_context(|| "Failed to read HEAD")?;
+    let oid = head
+        .target()
+        .ok_or_else(|| anyhow::anyhow!("HEAD has no target"))?;
+    Ok(oid.to_string())
+}
+
 /// Calculate total size of a directory in bytes.
 pub fn dir_size_bytes(path: &Path) -> u64 {
     WalkDir::new(path)

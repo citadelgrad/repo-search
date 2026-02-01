@@ -67,6 +67,7 @@ pub async fn add_repo(
         added_at: Utc::now(),
         indexed_at: None,
         file_count: 0,
+        head_commit: None,
     };
 
     // Save repo to state
@@ -319,6 +320,221 @@ async fn reindex_embeddings(state: AppState, repo_id: Uuid) -> anyhow::Result<()
     Ok(())
 }
 
+/// POST /api/repos/:id/sync - Fetch latest commits and re-index
+pub async fn sync_repo(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<(StatusCode, Json<Repo>), (StatusCode, String)> {
+    let repo = {
+        let repos = state.repos.read();
+        let repo = repos.iter().find(|r| r.id == id);
+        match repo {
+            None => return Err((StatusCode::NOT_FOUND, "Repo not found".to_string())),
+            Some(r) => {
+                match &r.status {
+                    RepoStatus::Ready | RepoStatus::Error(_) => {}
+                    _ => {
+                        return Err((
+                            StatusCode::CONFLICT,
+                            "Repo is already being processed".to_string(),
+                        ));
+                    }
+                }
+                r.clone()
+            }
+        }
+    };
+
+    // Check that the repo directory still exists on disk
+    let repo_dir = state.config.repos_dir().join(id.to_string());
+    if !repo_dir.exists() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Repo directory not found on disk. Delete and re-add the repo.".to_string(),
+        ));
+    }
+
+    // Set status to Indexing and return immediately
+    update_repo_status(&state, id, RepoStatus::Indexing);
+    let updated_repo = {
+        let repos = state.repos.read();
+        repos.iter().find(|r| r.id == id).cloned().unwrap()
+    };
+
+    // Spawn background sync task
+    let state_clone = state.clone();
+    let repo_url = repo.url.clone();
+    let repo_name = repo.name.clone();
+    let old_head = repo.head_commit.clone();
+    tokio::spawn(async move {
+        if let Err(e) = sync_and_reindex(state_clone, id, &repo_url, &repo_name, old_head).await {
+            tracing::error!("Failed to sync {repo_name}: {e:#}");
+        }
+    });
+
+    Ok((StatusCode::OK, Json(updated_repo)))
+}
+
+/// Fetch latest commits and re-index if HEAD changed.
+async fn sync_and_reindex(
+    state: AppState,
+    repo_id: Uuid,
+    url: &str,
+    repo_name: &str,
+    old_head: Option<String>,
+) -> anyhow::Result<()> {
+    let repo_dir = state.config.repos_dir().join(repo_id.to_string());
+
+    // Acquire clone permit (shared with clone operations)
+    let _permit = state
+        .clone_semaphore
+        .acquire()
+        .await
+        .map_err(|_| anyhow::anyhow!("Clone semaphore closed"))?;
+
+    // Pull with timeout
+    let url_owned = url.to_string();
+    let repo_dir_pull = repo_dir.clone();
+    let git_token = state.config.git_token.clone();
+    let timeout = std::time::Duration::from_secs(state.config.clone_timeout_secs);
+
+    let pull_result = tokio::time::timeout(
+        timeout,
+        tokio::task::spawn_blocking(move || {
+            crate::git::pull_repo(&repo_dir_pull, &url_owned, git_token.as_deref())
+        }),
+    )
+    .await;
+
+    let new_head = match pull_result {
+        Ok(Ok(Ok(sha))) => sha,
+        Ok(Ok(Err(e))) => {
+            update_repo_status(
+                &state,
+                repo_id,
+                RepoStatus::Error(format!("Fetch failed: {e:#}")),
+            );
+            anyhow::bail!("Fetch failed for {repo_name}: {e:#}");
+        }
+        Ok(Err(e)) => {
+            update_repo_status(
+                &state,
+                repo_id,
+                RepoStatus::Error("Sync task failed".to_string()),
+            );
+            anyhow::bail!("Sync task failed: {e}");
+        }
+        Err(_) => {
+            update_repo_status(
+                &state,
+                repo_id,
+                RepoStatus::Error(format!(
+                    "Sync timed out after {}s",
+                    state.config.clone_timeout_secs
+                )),
+            );
+            anyhow::bail!("Sync timed out");
+        }
+    };
+
+    // Skip re-index if HEAD unchanged
+    if old_head.as_deref() == Some(&new_head) {
+        tracing::info!("Sync {repo_name}: HEAD unchanged ({new_head}), skipping re-index");
+        update_repo_status(&state, repo_id, RepoStatus::Ready);
+        return Ok(());
+    }
+
+    tracing::info!(
+        "Sync {repo_name}: HEAD changed {} -> {new_head}, re-indexing",
+        old_head.as_deref().unwrap_or("(unknown)")
+    );
+
+    // Delete existing index data
+    if let Err(e) = state.bm25.delete_repo(&repo_id) {
+        tracing::warn!("Failed to delete BM25 data for {repo_name}: {e}");
+    }
+    if let Err(e) = state.vectors.delete_repo(&repo_id) {
+        tracing::warn!("Failed to delete vector data for {repo_name}: {e}");
+    }
+
+    // Re-walk and re-chunk
+    let repo_dir_walk = repo_dir.clone();
+    let files =
+        tokio::task::spawn_blocking(move || crate::git::walk_repo_files(&repo_dir_walk)).await?;
+
+    tracing::info!(
+        "Sync: found {} indexable files in {repo_name}",
+        files.len()
+    );
+
+    let mut all_chunks = Vec::new();
+    for file in &files {
+        let chunks = chunk_file(repo_id, &file.relative_path, &file.content, &file.language);
+        all_chunks.extend(chunks);
+    }
+
+    tracing::info!("Sync: created {} chunks for {repo_name}", all_chunks.len());
+
+    // BM25 index
+    let chunks_for_bm25 = all_chunks.clone();
+    let repo_name_bm25 = repo_name.to_string();
+    let bm25 = state.bm25.clone();
+    tokio::task::spawn_blocking(move || bm25.index_chunks(&repo_name_bm25, &chunks_for_bm25))
+        .await??;
+    tracing::info!("Sync: BM25 indexing complete for {repo_name}");
+
+    // Vector embeddings (best effort)
+    let texts: Vec<String> = all_chunks
+        .iter()
+        .map(|c| format!("File: {}\n{}", c.file_path, c.content))
+        .collect();
+
+    let chunk_metadata: Vec<(String, usize, String, String, usize, usize)> = all_chunks
+        .iter()
+        .map(|c| {
+            (
+                c.file_path.clone(),
+                c.chunk_index,
+                c.content.clone(),
+                c.language.clone(),
+                c.start_line,
+                c.end_line,
+            )
+        })
+        .collect();
+
+    let llm_config = state.llm_config.read().clone();
+    match crate::llm::embeddings::embed_batch(&state.http_client, &llm_config, &texts).await {
+        Ok(embeddings) => {
+            state
+                .vectors
+                .add_chunks(repo_id, repo_name, &chunk_metadata, embeddings)?;
+            tracing::info!("Sync: vector indexing complete for {repo_name}");
+        }
+        Err(e) => {
+            tracing::warn!(
+                "Sync: vector embedding failed for {repo_name} (LLM may not be running): {e:#}"
+            );
+        }
+    }
+
+    // Update repo metadata
+    {
+        let mut repos = state.repos.write();
+        if let Some(repo) = repos.iter_mut().find(|r| r.id == repo_id) {
+            repo.status = RepoStatus::Ready;
+            repo.indexed_at = Some(Utc::now());
+            repo.file_count = files.len();
+            repo.head_commit = Some(new_head);
+        }
+        drop(repos);
+        state.persist_repos();
+    }
+
+    tracing::info!("Sync complete for {repo_name}");
+    Ok(())
+}
+
 /// Clone a repo and index its files.
 async fn clone_and_index(
     state: AppState,
@@ -455,6 +671,15 @@ async fn clone_and_index(
         }
     }
 
+    // Read HEAD commit SHA
+    let head_commit = match crate::git::head_commit_sha(&repo_dir) {
+        Ok(sha) => Some(sha),
+        Err(e) => {
+            tracing::warn!("Could not read HEAD for {repo_name}: {e}");
+            None
+        }
+    };
+
     // Mark as ready
     {
         let mut repos = state.repos.write();
@@ -462,6 +687,7 @@ async fn clone_and_index(
             repo.status = RepoStatus::Ready;
             repo.indexed_at = Some(Utc::now());
             repo.file_count = files.len();
+            repo.head_commit = head_commit;
         }
         drop(repos);
         state.persist_repos();

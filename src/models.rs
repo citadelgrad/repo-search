@@ -12,6 +12,8 @@ pub struct Repo {
     pub added_at: DateTime<Utc>,
     pub indexed_at: Option<DateTime<Utc>>,
     pub file_count: usize,
+    #[serde(default)]
+    pub head_commit: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
