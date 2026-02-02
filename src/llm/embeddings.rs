@@ -11,13 +11,45 @@ use crate::config::LlmConfig;
 /// still returns 400 for inputs that exceed the context length.
 const MAX_EMBED_CHARS: usize = 3_000;
 
-/// Truncate `text` to at most `MAX_EMBED_CHARS`, splitting on a UTF-8 char boundary.
-fn truncate_for_embedding(text: &str) -> &str {
-    if text.len() <= MAX_EMBED_CHARS {
+/// Task type for asymmetric embedding models (e.g. nomic-embed-text, E5).
+/// These models were trained with different prefixes for queries vs documents,
+/// which improves the embedding space geometry for retrieval tasks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmbedTask {
+    /// Indexing: text being stored for later retrieval.
+    SearchDocument,
+    /// Querying: text used to search against stored documents.
+    SearchQuery,
+}
+
+impl EmbedTask {
+    /// Return the prefix string for the given embedding model.
+    /// The trailing space after the colon is required by most models.
+    pub fn prefix_for_model(&self, model_name: &str) -> &'static str {
+        let lower = model_name.to_lowercase();
+        if lower.contains("nomic") {
+            match self {
+                EmbedTask::SearchDocument => "search_document: ",
+                EmbedTask::SearchQuery => "search_query: ",
+            }
+        } else if lower.contains("e5") {
+            match self {
+                EmbedTask::SearchDocument => "passage: ",
+                EmbedTask::SearchQuery => "query: ",
+            }
+        } else {
+            "" // Unknown model: no prefix (backwards-compatible)
+        }
+    }
+}
+
+/// Truncate `text` to at most `max_chars`, splitting on a UTF-8 char boundary.
+fn truncate_for_embedding(text: &str, max_chars: usize) -> &str {
+    if text.len() <= max_chars {
         return text;
     }
     // Find the last char boundary at or before the limit
-    let mut end = MAX_EMBED_CHARS;
+    let mut end = max_chars;
     while !text.is_char_boundary(end) {
         end -= 1;
     }
@@ -29,14 +61,22 @@ pub async fn embed_batch(
     client: &reqwest::Client,
     config: &LlmConfig,
     texts: &[String],
+    task: EmbedTask,
 ) -> Result<Vec<Vec<f32>>> {
     if texts.is_empty() {
         return Ok(Vec::new());
     }
 
+    let prefix = task.prefix_for_model(&config.embedding_model);
+    let prefix_len = prefix.len();
+
+    // Apply prefix before truncation so the prefix is never truncated away.
     let truncated: Vec<String> = texts
         .iter()
-        .map(|t| truncate_for_embedding(t).to_string())
+        .map(|t| {
+            let body = truncate_for_embedding(t, MAX_EMBED_CHARS.saturating_sub(prefix_len));
+            format!("{prefix}{body}")
+        })
         .collect();
 
     match config.provider.as_str() {
@@ -51,8 +91,9 @@ pub async fn embed_single(
     client: &reqwest::Client,
     config: &LlmConfig,
     text: &str,
+    task: EmbedTask,
 ) -> Result<Vec<f32>> {
-    let results = embed_batch(client, config, &[text.to_string()]).await?;
+    let results = embed_batch(client, config, &[text.to_string()], task).await?;
     results
         .into_iter()
         .next()
@@ -179,4 +220,79 @@ async fn embed_openai(
     }
 
     Ok(all_embeddings)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── EmbedTask prefix tests ──────────────────────────
+
+    #[test]
+    fn test_nomic_document_prefix() {
+        let prefix = EmbedTask::SearchDocument.prefix_for_model("nomic-embed-text");
+        assert_eq!(prefix, "search_document: ");
+    }
+
+    #[test]
+    fn test_nomic_query_prefix() {
+        let prefix = EmbedTask::SearchQuery.prefix_for_model("nomic-embed-text");
+        assert_eq!(prefix, "search_query: ");
+    }
+
+    #[test]
+    fn test_nomic_case_insensitive() {
+        let prefix = EmbedTask::SearchQuery.prefix_for_model("Nomic-Embed-Text-v1.5");
+        assert_eq!(prefix, "search_query: ");
+    }
+
+    #[test]
+    fn test_e5_document_prefix() {
+        let prefix = EmbedTask::SearchDocument.prefix_for_model("e5-large-v2");
+        assert_eq!(prefix, "passage: ");
+    }
+
+    #[test]
+    fn test_e5_query_prefix() {
+        let prefix = EmbedTask::SearchQuery.prefix_for_model("e5-large-v2");
+        assert_eq!(prefix, "query: ");
+    }
+
+    #[test]
+    fn test_unknown_model_no_prefix() {
+        let prefix = EmbedTask::SearchDocument.prefix_for_model("all-minilm-l6-v2");
+        assert_eq!(prefix, "");
+        let prefix = EmbedTask::SearchQuery.prefix_for_model("all-minilm-l6-v2");
+        assert_eq!(prefix, "");
+    }
+
+    // ── truncation tests ────────────────────────────────
+
+    #[test]
+    fn test_truncate_short_text() {
+        let text = "short text";
+        assert_eq!(truncate_for_embedding(text, 100), "short text");
+    }
+
+    #[test]
+    fn test_truncate_at_limit() {
+        let text = "a".repeat(100);
+        assert_eq!(truncate_for_embedding(&text, 100).len(), 100);
+    }
+
+    #[test]
+    fn test_truncate_over_limit() {
+        let text = "a".repeat(200);
+        assert_eq!(truncate_for_embedding(&text, 100).len(), 100);
+    }
+
+    #[test]
+    fn test_truncate_respects_utf8_boundary() {
+        // é is 2 bytes in UTF-8
+        let text = "é".repeat(100); // 200 bytes
+        let result = truncate_for_embedding(&text, 150);
+        assert!(result.len() <= 150);
+        // Should be on a char boundary (even number of bytes for this char)
+        assert!(result.len() % 2 == 0);
+    }
 }

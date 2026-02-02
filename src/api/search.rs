@@ -82,7 +82,7 @@ pub async fn run_search(
 
         let vector_hits = if use_vector {
             let llm_config = state.llm_config.read().clone();
-            match crate::llm::embeddings::embed_single(&state.http_client, &llm_config, q).await {
+            match crate::llm::embeddings::embed_single(&state.http_client, &llm_config, q, crate::llm::embeddings::EmbedTask::SearchQuery).await {
                 Ok(query_embedding) => state
                     .vectors
                     .search(&query_embedding, fetch_limit, repo_ids_vec.as_deref()),

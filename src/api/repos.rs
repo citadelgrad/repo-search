@@ -373,7 +373,7 @@ async fn reindex_embeddings(state: AppState, repo_id: Uuid) -> anyhow::Result<()
         .collect();
 
     let llm_config = state.llm_config.read().clone();
-    match crate::llm::embeddings::embed_batch(&state.http_client, &llm_config, &texts).await {
+    match crate::llm::embeddings::embed_batch(&state.http_client, &llm_config, &texts, crate::llm::embeddings::EmbedTask::SearchDocument).await {
         Ok(embeddings) => {
             state
                 .vectors
@@ -591,7 +591,7 @@ async fn sync_and_reindex(
         .collect();
 
     let llm_config = state.llm_config.read().clone();
-    match crate::llm::embeddings::embed_batch(&state.http_client, &llm_config, &texts).await {
+    match crate::llm::embeddings::embed_batch(&state.http_client, &llm_config, &texts, crate::llm::embeddings::EmbedTask::SearchDocument).await {
         Ok(embeddings) => {
             state
                 .vectors
@@ -744,7 +744,7 @@ async fn clone_and_index(
         .collect();
 
     let llm_config = state.llm_config.read().clone();
-    match crate::llm::embeddings::embed_batch(&state.http_client, &llm_config, &texts).await {
+    match crate::llm::embeddings::embed_batch(&state.http_client, &llm_config, &texts, crate::llm::embeddings::EmbedTask::SearchDocument).await {
         Ok(embeddings) => {
             state
                 .vectors
