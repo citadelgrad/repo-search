@@ -56,11 +56,15 @@ impl AppState {
         })
     }
 
-    /// Persist repos list to disk.
+    /// Persist repos list to disk (atomic write via temp file + rename).
     pub fn persist_repos(&self) {
         let repos = self.repos.read();
         if let Ok(data) = serde_json::to_string_pretty(&*repos) {
-            let _ = std::fs::write(self.config.db_path(), data);
+            let db_path = self.config.db_path();
+            let tmp_path = db_path.with_extension("json.tmp");
+            if std::fs::write(&tmp_path, &data).is_ok() {
+                let _ = std::fs::rename(&tmp_path, &db_path);
+            }
         }
     }
 }

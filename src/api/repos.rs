@@ -4,13 +4,15 @@ use axum::Json;
 use chrono::Utc;
 use uuid::Uuid;
 
-use crate::models::{AddRepoRequest, FileChunk, LlmConfigUpdate, Repo, RepoStatus};
+use crate::models::{AddRepoRequest, FileChunk, LlmConfigUpdate, ReorderRequest, Repo, RepoStatus};
 use crate::state::AppState;
 
-/// GET /api/repos - List all repos
+/// GET /api/repos - List all repos (pinned first, preserving relative order)
 pub async fn list_repos(State(state): State<AppState>) -> Json<Vec<Repo>> {
     let repos = state.repos.read();
-    Json(repos.clone())
+    let mut sorted = repos.clone();
+    sorted.sort_by_key(|r| !r.pinned);
+    Json(sorted)
 }
 
 /// POST /api/repos - Add a new repo (clone + index in background)
@@ -68,6 +70,7 @@ pub async fn add_repo(
         indexed_at: None,
         file_count: 0,
         head_commit: None,
+        pinned: false,
     };
 
     // Save repo to state
@@ -130,6 +133,84 @@ pub async fn delete_repo(
         state.persist_repos();
     }
 
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// PATCH /api/repos/:id/pin - Toggle pin status
+pub async fn pin_repo(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Repo>, (StatusCode, String)> {
+    let mut repos = state.repos.write();
+    let repo = repos.iter_mut().find(|r| r.id == id);
+    match repo {
+        None => return Err((StatusCode::NOT_FOUND, "Repo not found".to_string())),
+        Some(r) => {
+            r.pinned = !r.pinned;
+        }
+    }
+
+    // Reposition: move the toggled repo to end of pinned group (if pinning)
+    // or to the start of unpinned group (if unpinning).
+    // Find the repo's current index and its new pinned state.
+    let idx = repos.iter().position(|r| r.id == id).unwrap();
+    let is_now_pinned = repos[idx].pinned;
+    let repo_moved = repos.remove(idx);
+
+    if is_now_pinned {
+        // Insert at end of pinned group (before first unpinned)
+        let insert_at = repos.iter().position(|r| !r.pinned).unwrap_or(repos.len());
+        repos.insert(insert_at, repo_moved);
+    } else {
+        // Insert at start of unpinned group (after last pinned)
+        let insert_at = repos.iter().rposition(|r| r.pinned).map(|i| i + 1).unwrap_or(0);
+        repos.insert(insert_at, repo_moved);
+    }
+
+    let updated = repos.iter().find(|r| r.id == id).cloned().unwrap();
+    drop(repos);
+    state.persist_repos();
+    Ok(Json(updated))
+}
+
+/// PUT /api/repos/order - Bulk reorder repos
+pub async fn reorder_repos(
+    State(state): State<AppState>,
+    Json(req): Json<ReorderRequest>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let mut repos = state.repos.write();
+
+    if req.order.len() != repos.len() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!(
+                "Order list has {} IDs but there are {} repos",
+                req.order.len(),
+                repos.len()
+            ),
+        ));
+    }
+
+    // Validate all IDs exist
+    for id in &req.order {
+        if !repos.iter().any(|r| r.id == *id) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("Unknown repo ID: {id}"),
+            ));
+        }
+    }
+
+    // Reorder the Vec to match the requested order
+    let mut reordered = Vec::with_capacity(repos.len());
+    for id in &req.order {
+        let repo = repos.iter().find(|r| r.id == *id).cloned().unwrap();
+        reordered.push(repo);
+    }
+    *repos = reordered;
+
+    drop(repos);
+    state.persist_repos();
     Ok(StatusCode::NO_CONTENT)
 }
 

@@ -14,6 +14,8 @@ pub struct Repo {
     pub file_count: usize,
     #[serde(default)]
     pub head_commit: Option<String>,
+    #[serde(default)]
+    pub pinned: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -83,6 +85,12 @@ fn default_true() -> bool {
 #[derive(Debug, Clone, Deserialize)]
 pub struct AddRepoRequest {
     pub url: String,
+}
+
+/// Bulk reorder request
+#[derive(Debug, Clone, Deserialize)]
+pub struct ReorderRequest {
+    pub order: Vec<Uuid>,
 }
 
 /// Search response
