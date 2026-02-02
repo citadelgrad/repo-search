@@ -1,7 +1,7 @@
 use parking_lot::RwLock;
 use std::sync::Arc;
 
-use crate::config::{Config, LlmConfig};
+use crate::config::{Config, LlmConfig, RerankerConfig};
 use crate::models::Repo;
 use crate::search::bm25::Bm25Index;
 use crate::search::vector::VectorStore;
@@ -14,6 +14,8 @@ pub struct AppState {
     pub bm25: Arc<Bm25Index>,
     pub vectors: Arc<VectorStore>,
     pub http_client: reqwest::Client,
+    pub reranker_client: reqwest::Client,
+    pub reranker_config: RerankerConfig,
     pub llm_config: Arc<RwLock<LlmConfig>>,
     pub clone_semaphore: Arc<tokio::sync::Semaphore>,
     pub chat_semaphore: Arc<tokio::sync::Semaphore>,
@@ -66,7 +68,15 @@ impl AppState {
             VectorStore::open_or_create_with_limit(&config.vector_dir(), config.max_vector_entries)?;
 
         let llm_config = config.llm.clone();
+        let reranker_config = config.reranker.clone();
         let max_concurrent_clones = config.max_concurrent_clones;
+
+        // Dedicated client for the reranker with its own (shorter) timeout
+        let reranker_timeout = std::time::Duration::from_secs(reranker_config.timeout_secs.min(30));
+        let reranker_client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .timeout(reranker_timeout)
+            .build()?;
 
         Ok(Self {
             config,
@@ -77,6 +87,8 @@ impl AppState {
                 .connect_timeout(std::time::Duration::from_secs(10))
                 .timeout(std::time::Duration::from_secs(120))
                 .build()?,
+            reranker_client,
+            reranker_config,
             llm_config: Arc::new(RwLock::new(llm_config)),
             clone_semaphore: Arc::new(tokio::sync::Semaphore::new(max_concurrent_clones)),
             chat_semaphore: Arc::new(tokio::sync::Semaphore::new(3)),

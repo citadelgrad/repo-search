@@ -100,6 +100,8 @@ pub struct SearchResponse {
     pub results: Vec<SearchHit>,
     pub total_bm25_hits: usize,
     pub total_vector_hits: usize,
+    /// Which reranking tier was used: "cross-encoder", "llm", or "rrf-only".
+    pub rerank_tier: String,
 }
 
 #[cfg(test)]

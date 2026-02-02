@@ -9,6 +9,8 @@ pub struct Config {
     pub bind_addr: String,
     /// LLM provider configuration
     pub llm: LlmConfig,
+    /// Cross-encoder reranker configuration
+    pub reranker: RerankerConfig,
     /// Maximum number of repos allowed
     pub max_repos: usize,
     /// Maximum concurrent clone operations
@@ -21,6 +23,28 @@ pub struct Config {
     pub max_vector_entries: usize,
     /// Git personal access token for cloning private repos
     pub git_token: Option<String>,
+}
+
+/// Configuration for the cross-encoder reranker sidecar (e.g. llama-server with Qwen3-Reranker).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RerankerConfig {
+    /// Base URL for the reranker API (e.g. "http://127.0.0.1:8082").
+    /// If None, reranking falls back to RRF-only.
+    pub base_url: Option<String>,
+    /// Model name to send in the rerank request.
+    pub model: Option<String>,
+    /// Request timeout in seconds (capped at 30).
+    pub timeout_secs: u64,
+}
+
+impl Default for RerankerConfig {
+    fn default() -> Self {
+        Self {
+            base_url: None,
+            model: None,
+            timeout_secs: 10,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,6 +69,7 @@ impl Default for Config {
             data_dir: PathBuf::from("./data"),
             bind_addr: "127.0.0.1:9000".to_string(),
             llm: LlmConfig::default(),
+            reranker: RerankerConfig::default(),
             max_repos: 50,
             max_concurrent_clones: 2,
             clone_timeout_secs: 300,
@@ -125,6 +150,19 @@ impl Config {
         }
         if let Ok(token) = std::env::var("REPO_SEARCH_GIT_TOKEN") {
             config.git_token = Some(token);
+        }
+
+        // Reranker config
+        if let Ok(url) = std::env::var("RERANKER_BASE_URL") {
+            config.reranker.base_url = Some(url);
+        }
+        if let Ok(model) = std::env::var("RERANKER_MODEL") {
+            config.reranker.model = Some(model);
+        }
+        if let Ok(val) = std::env::var("RERANKER_TIMEOUT_SECS") {
+            if let Ok(v) = val.parse::<u64>() {
+                config.reranker.timeout_secs = v.min(30); // Cap at 30s
+            }
         }
 
         config

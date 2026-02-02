@@ -109,20 +109,81 @@ pub async fn run_search(
     let rrf_limit = 30;
     let mut results = multi_query_rrf_fusion(&all_query_results, rrf_limit);
 
-    // ── Step 4: LLM Re-ranking with position-aware blend ────
-    if use_rerank && !results.is_empty() {
-        let llm_config = state.llm_config.read().clone();
-        match crate::llm::rerank::rerank(&state.http_client, &llm_config, &query, &mut results)
+    // ── Step 4: Reranking (two-tier: cross-encoder → RRF-only) ─
+    let rerank_tier = if use_rerank && !results.is_empty() {
+        if state.reranker_config.base_url.is_some() {
+            // Tier 1: Try cross-encoder reranker
+            let documents: Vec<String> = results.iter().map(|r| r.content.clone()).collect();
+            match crate::llm::cross_encoder::rerank(
+                &state.reranker_client,
+                &state.reranker_config,
+                &query,
+                &documents,
+                results.len(),
+            )
             .await
-        {
-            Ok(()) => {
-                tracing::info!("Re-ranking applied to {} results", results.len());
+            {
+                Ok(rerank_results) => {
+                    // Apply cross-encoder scores with position-aware blending
+                    for rr in &rerank_results {
+                        if rr.index < results.len() {
+                            results[rr.index].rerank_score = Some(rr.score);
+                        }
+                    }
+                    // Position-aware blending (same weights as before)
+                    for (i, hit) in results.iter_mut().enumerate() {
+                        if let Some(rerank) = hit.rerank_score {
+                            let (rrf_w, rerank_w) = if i < 3 {
+                                (0.75, 0.25)
+                            } else if i < 10 {
+                                (0.60, 0.40)
+                            } else {
+                                (0.40, 0.60)
+                            };
+                            hit.combined_score = rrf_w * hit.combined_score + rerank_w * rerank;
+                        }
+                    }
+                    // Re-sort by blended score
+                    results.sort_by(|a, b| {
+                        b.combined_score
+                            .partial_cmp(&a.combined_score)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                    tracing::info!(
+                        "Cross-encoder reranking applied to {} results",
+                        results.len()
+                    );
+                    "cross-encoder"
+                }
+                Err(e) => {
+                    tracing::warn!("Cross-encoder reranking failed, using RRF-only: {e}");
+                    "rrf-only"
+                }
             }
-            Err(e) => {
-                tracing::warn!("Re-ranking failed: {e}");
+        } else {
+            // Tier 2: Fall back to LLM reranker if no cross-encoder configured
+            let llm_config = state.llm_config.read().clone();
+            match crate::llm::rerank::rerank(
+                &state.http_client,
+                &llm_config,
+                &query,
+                &mut results,
+            )
+            .await
+            {
+                Ok(()) => {
+                    tracing::info!("LLM reranking applied to {} results", results.len());
+                    "llm"
+                }
+                Err(e) => {
+                    tracing::warn!("LLM reranking failed, using RRF-only: {e}");
+                    "rrf-only"
+                }
             }
         }
-    }
+    } else {
+        "rrf-only"
+    };
 
     // Trim to requested limit
     results.truncate(limit);
@@ -132,6 +193,7 @@ pub async fn run_search(
         results,
         total_bm25_hits: total_bm25,
         total_vector_hits: total_vector,
+        rerank_tier: rerank_tier.to_string(),
     })
 }
 
