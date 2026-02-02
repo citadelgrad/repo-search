@@ -133,9 +133,7 @@ impl Bm25Index {
 
         let query_parser =
             QueryParser::for_index(&self.index, vec![self.f_content, self.f_file_path]);
-        let query = query_parser
-            .parse_query(query_str)
-            .context("Failed to parse search query")?;
+        let (query, _errors) = query_parser.parse_query_lenient(query_str);
 
         let top_docs = searcher
             .search(&query, &TopDocs::with_limit(limit * 2))

@@ -26,10 +26,37 @@ impl AppState {
         std::fs::create_dir_all(config.index_dir())?;
         std::fs::create_dir_all(config.vector_dir())?;
 
-        // Load persisted repos
-        let repos = if config.db_path().exists() {
+        // Load persisted repos, resetting any in-progress statuses that were
+        // interrupted by a server restart.
+        let repos: Vec<Repo> = if config.db_path().exists() {
             let data = std::fs::read_to_string(config.db_path())?;
-            serde_json::from_str(&data).unwrap_or_default()
+            let mut loaded: Vec<Repo> = serde_json::from_str(&data).unwrap_or_default();
+            let mut fixed = false;
+            for repo in &mut loaded {
+                match &repo.status {
+                    crate::models::RepoStatus::Cloning
+                    | crate::models::RepoStatus::Indexing
+                    | crate::models::RepoStatus::Embedding => {
+                        tracing::warn!(
+                            "Repo '{}' was stuck in {:?} status — resetting to error",
+                            repo.name,
+                            repo.status,
+                        );
+                        repo.status = crate::models::RepoStatus::Error(
+                            "interrupted by server restart — click Re-index".to_string(),
+                        );
+                        fixed = true;
+                    }
+                    _ => {}
+                }
+            }
+            if fixed {
+                // Persist the corrected statuses immediately
+                if let Ok(json) = serde_json::to_string_pretty(&loaded) {
+                    let _ = std::fs::write(config.db_path(), json);
+                }
+            }
+            loaded
         } else {
             Vec::new()
         };
