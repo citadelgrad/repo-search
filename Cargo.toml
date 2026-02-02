@@ -25,6 +25,12 @@ reqwest = { version = "0.13", features = ["json", "stream"] }
 futures-util = "0.3"
 bytes = "1"
 
+# AST parsing for code chunking
+tree-sitter = "0.24"
+tree-sitter-rust = "0.23"
+tree-sitter-javascript = "0.23"
+tree-sitter-typescript = "0.23"
+
 # Utilities
 uuid = { version = "1", features = ["v4", "serde"] }
 walkdir = "2"

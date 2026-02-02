@@ -804,56 +804,35 @@ fn update_repo_status(state: &AppState, repo_id: Uuid, status: RepoStatus) {
     state.persist_repos();
 }
 
-/// Split a file into overlapping chunks of ~100 lines each.
+/// Split a file into chunks using AST-aware chunking (for supported languages)
+/// or a smart line-based fallback.
 fn chunk_file(
     repo_id: Uuid,
     file_path: &str,
     content: &str,
     language: &str,
 ) -> Vec<FileChunk> {
-    let lines: Vec<&str> = content.lines().collect();
+    let raw_chunks = crate::chunking::chunk_code(content, language);
 
-    if lines.is_empty() {
-        return Vec::new();
-    }
-
-    let chunk_size = 100;
-    let overlap = 20;
-    let mut chunks = Vec::new();
-    let mut start = 0;
-
-    while start < lines.len() {
-        let end = (start + chunk_size).min(lines.len());
-        let chunk_content = lines[start..end].join("\n");
-
-        chunks.push(FileChunk {
+    raw_chunks
+        .into_iter()
+        .enumerate()
+        .map(|(i, c)| FileChunk {
             repo_id,
             file_path: file_path.to_string(),
-            chunk_index: chunks.len(),
-            content: chunk_content,
+            chunk_index: i,
+            content: c.content,
             language: language.to_string(),
-            start_line: start + 1,
-            end_line: end,
-        });
-
-        if end >= lines.len() {
-            break;
-        }
-
-        start += chunk_size - overlap;
-    }
-
-    chunks
+            start_line: c.start_line,
+            end_line: c.end_line,
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use uuid::Uuid;
-
-    fn lines_str(n: usize) -> String {
-        (1..=n).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n")
-    }
 
     #[test]
     fn test_chunk_empty_file() {
@@ -863,65 +842,17 @@ mod tests {
     }
 
     #[test]
-    fn test_chunk_small_file_single_chunk() {
+    fn test_chunk_small_rust_file_single_chunk() {
         let id = Uuid::new_v4();
-        let content = lines_str(50);
-        let chunks = chunk_file(id, "small.rs", &content, "rust");
+        let content = "fn hello() {\n    println!(\"hello\");\n}\n";
+        let chunks = chunk_file(id, "small.rs", content, "rust");
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0].repo_id, id);
         assert_eq!(chunks[0].file_path, "small.rs");
         assert_eq!(chunks[0].chunk_index, 0);
         assert_eq!(chunks[0].language, "rust");
         assert_eq!(chunks[0].start_line, 1);
-        assert_eq!(chunks[0].end_line, 50);
-    }
-
-    #[test]
-    fn test_chunk_exactly_100_lines() {
-        let id = Uuid::new_v4();
-        let content = lines_str(100);
-        let chunks = chunk_file(id, "exact.rs", &content, "rust");
-        assert_eq!(chunks.len(), 1);
-        assert_eq!(chunks[0].start_line, 1);
-        assert_eq!(chunks[0].end_line, 100);
-    }
-
-    #[test]
-    fn test_chunk_101_lines_creates_overlap() {
-        let id = Uuid::new_v4();
-        let content = lines_str(101);
-        let chunks = chunk_file(id, "overlap.rs", &content, "rust");
-        assert_eq!(chunks.len(), 2);
-
-        // First chunk: lines 1-100
-        assert_eq!(chunks[0].start_line, 1);
-        assert_eq!(chunks[0].end_line, 100);
-        assert_eq!(chunks[0].chunk_index, 0);
-
-        // Second chunk starts at 81 (100 - 20 overlap + 1)
-        assert_eq!(chunks[1].start_line, 81);
-        assert_eq!(chunks[1].end_line, 101);
-        assert_eq!(chunks[1].chunk_index, 1);
-    }
-
-    #[test]
-    fn test_chunk_large_file_multiple_chunks() {
-        let id = Uuid::new_v4();
-        let content = lines_str(350);
-        let chunks = chunk_file(id, "large.rs", &content, "rust");
-
-        // 350 lines with chunk_size=100, overlap=20, stride=80:
-        // chunk 0: 1-100, chunk 1: 81-180, chunk 2: 161-260, chunk 3: 241-340, chunk 4: 321-350
-        assert!(chunks.len() >= 4);
-
-        // Verify sequential chunk indices
-        for (i, chunk) in chunks.iter().enumerate() {
-            assert_eq!(chunk.chunk_index, i);
-        }
-
-        // Verify last chunk covers the end
-        let last = chunks.last().unwrap();
-        assert_eq!(last.end_line, 350);
+        assert!(chunks[0].content.contains("fn hello"));
     }
 
     #[test]
@@ -930,23 +861,29 @@ mod tests {
         let content = "fn main() {\n    println!(\"hello\");\n}";
         let chunks = chunk_file(id, "main.rs", content, "rust");
         assert_eq!(chunks.len(), 1);
-        assert_eq!(chunks[0].content, content);
+        assert!(chunks[0].content.contains("fn main()"));
+        assert!(chunks[0].content.contains("println!"));
     }
 
     #[test]
-    fn test_chunk_overlap_contains_shared_lines() {
+    fn test_chunk_sequential_indices() {
         let id = Uuid::new_v4();
-        let content = lines_str(120);
-        let chunks = chunk_file(id, "overlap.rs", &content, "rust");
-        assert_eq!(chunks.len(), 2);
+        // Create content large enough to produce multiple chunks
+        let funcs: String = (0..100)
+            .map(|i| format!("fn func_{i}() {{\n    let x = {i};\n    let y = x * 2;\n    let z = y + 1;\n}}\n\n"))
+            .collect();
+        let chunks = chunk_file(id, "many.rs", &funcs, "rust");
+        for (i, chunk) in chunks.iter().enumerate() {
+            assert_eq!(chunk.chunk_index, i);
+        }
+    }
 
-        // Lines 81-100 should appear in both chunks
-        let c0_lines: Vec<&str> = chunks[0].content.lines().collect();
-        let c1_lines: Vec<&str> = chunks[1].content.lines().collect();
-
-        // Last 20 lines of chunk 0 should match first 20 lines of chunk 1
-        let c0_tail = &c0_lines[80..100];
-        let c1_head = &c1_lines[0..20];
-        assert_eq!(c0_tail, c1_head);
+    #[test]
+    fn test_chunk_fallback_for_unknown_language() {
+        let id = Uuid::new_v4();
+        let content = "some text\nmore text\n";
+        let chunks = chunk_file(id, "readme.md", content, "markdown");
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].language, "markdown");
     }
 }

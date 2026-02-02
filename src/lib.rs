@@ -75,6 +75,7 @@
 //! - [`state`] - Shared application state holding indexes, config, and persistence
 
 pub mod api;
+pub mod chunking;
 pub mod config;
 pub mod git;
 pub mod llm;
