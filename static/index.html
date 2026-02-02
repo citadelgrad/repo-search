@@ -424,6 +424,14 @@
     font-family: var(--font-mono);
     word-break: break-all;
   }
+  .repo-card .url a {
+    color: var(--text-muted);
+    text-decoration: none;
+  }
+  .repo-card .url a:hover {
+    color: var(--accent);
+    text-decoration: underline;
+  }
 
   .repo-card .meta {
     font-size: 12px;
@@ -488,6 +496,67 @@
     background: var(--accent-dim);
     border-color: var(--accent);
     color: #fff;
+  }
+
+  /* ── Pin / Sort / Drag ─────────────────────────── */
+  .repo-controls {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    margin-bottom: 12px;
+    gap: 8px;
+  }
+
+  .sort-select {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    padding: 5px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    outline: none;
+    cursor: pointer;
+  }
+  .sort-select:focus { border-color: var(--accent); }
+
+  .drag-handle {
+    cursor: grab;
+    color: var(--text-muted);
+    opacity: 0.4;
+    padding: 4px 2px;
+    display: flex;
+    align-items: center;
+    user-select: none;
+    flex-shrink: 0;
+  }
+  .drag-handle:hover { opacity: 0.8; }
+  .drag-handle.hidden { display: none; }
+  .sortable-ghost { opacity: 0.4; }
+  .sortable-chosen { box-shadow: 0 0 0 2px var(--accent); }
+
+  .pin-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    padding: 6px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .pin-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .pin-btn.pinned { color: var(--accent); border-color: var(--accent); }
+
+  .pinned-separator {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 8px 0 4px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 4px;
   }
 
   /* ── Settings Page ───────────────────────────── */
@@ -912,7 +981,21 @@
       <input type="text" id="repo-url" placeholder="https://github.com/user/repo.git">
       <button onclick="addRepo()">Clone + Index</button>
     </div>
-    <div id="repo-list" class="repo-list"></div>
+    <div class="repo-controls">
+      <select id="sort-repos" class="sort-select" onchange="onSortChange()">
+        <option value="custom">Custom order</option>
+        <option value="name-asc">Name (A-Z)</option>
+        <option value="name-desc">Name (Z-A)</option>
+        <option value="added-desc">Date added (newest)</option>
+        <option value="added-asc">Date added (oldest)</option>
+        <option value="files-desc">File count (most)</option>
+        <option value="files-asc">File count (least)</option>
+      </select>
+    </div>
+    <div id="pinned-separator" class="pinned-separator" style="display:none;">Pinned</div>
+    <div id="pinned-list" class="repo-list"></div>
+    <div id="unpinned-separator" class="pinned-separator" style="display:none;">Repos</div>
+    <div id="unpinned-list" class="repo-list"></div>
     <div id="repos-empty" class="empty-state">
       <h3>No repositories yet</h3>
       <p>Paste a git URL above to clone and index a repository for search.</p>
@@ -2313,6 +2396,8 @@ return Pe}()
 
 </script>
 
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js"></script>
+
 <script>
 const API = '';
 
@@ -2840,50 +2925,162 @@ async function doSearch() {
 
 // ── Repos ────────────────────────────────────────
 let repoPolling = null;
+let isDragging = false;
+let sortablePinned = null;
+let sortableUnpinned = null;
+
+// SVG icons for pin button and drag handle
+const PIN_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 11V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v7"/><path d="M5 15h14l-1.5-4H6.5L5 15z"/></svg>';
+const GRIP_SVG = '<svg width="10" height="16" viewBox="0 0 10 16" fill="currentColor"><circle cx="3" cy="3" r="1.5"/><circle cx="7" cy="3" r="1.5"/><circle cx="3" cy="8" r="1.5"/><circle cx="7" cy="8" r="1.5"/><circle cx="3" cy="13" r="1.5"/><circle cx="7" cy="13" r="1.5"/></svg>';
+
+function getRepoSort() {
+  return ssGet('repo_sort') || 'custom';
+}
+
+function sortReposList(repos, mode) {
+  if (mode === 'custom') return repos;
+  const sorted = repos.slice();
+  switch (mode) {
+    case 'name-asc': sorted.sort(function(a, b) { return a.name.localeCompare(b.name); }); break;
+    case 'name-desc': sorted.sort(function(a, b) { return b.name.localeCompare(a.name); }); break;
+    case 'added-desc': sorted.sort(function(a, b) { return new Date(b.added_at) - new Date(a.added_at); }); break;
+    case 'added-asc': sorted.sort(function(a, b) { return new Date(a.added_at) - new Date(b.added_at); }); break;
+    case 'files-desc': sorted.sort(function(a, b) { return b.file_count - a.file_count; }); break;
+    case 'files-asc': sorted.sort(function(a, b) { return a.file_count - b.file_count; }); break;
+  }
+  return sorted;
+}
+
+function onSortChange() {
+  var sel = document.getElementById('sort-repos');
+  ssSet('repo_sort', sel.value);
+  loadRepos();
+}
+
+// Build a single repo card's HTML. All user content is escaped via esc().
+function renderRepoCard(r, sortMode) {
+  var statusClass = typeof r.status === 'string' ? r.status : 'error';
+  var statusText = typeof r.status === 'string' ? r.status : 'error: ' + r.status.error;
+  var isProcessing = statusText === 'cloning' || statusText === 'indexing' || statusText === 'embedding';
+  var isReady = statusText === 'ready';
+  var isError = statusClass === 'error';
+  var canReindex = isReady || isError;
+  var canSync = isReady || isError;
+  var isCustom = sortMode === 'custom';
+  var html = '<div class="repo-card" data-id="' + esc(r.id) + '">';
+  html += '<div class="drag-handle' + (isCustom ? '' : ' hidden') + '">' + GRIP_SVG + '</div>';
+  html += '<div class="info">';
+  html += '<div class="name">' + esc(r.name) + '</div>';
+  html += '<div class="url"><a href="' + esc(r.url) + '" target="_blank" rel="noopener">' + esc(r.url) + '</a></div>';
+  html += '<div class="meta">' + r.file_count + ' files | Added ' + new Date(r.added_at).toLocaleDateString();
+  if (r.indexed_at) html += ' | Indexed ' + timeAgo(r.indexed_at);
+  html += '</div></div>';
+  html += '<span class="status-badge ' + esc(statusClass) + '">' + (isProcessing ? '<span class="spinner"></span>' : '') + esc(statusText) + '</span>';
+  html += '<button class="pin-btn' + (r.pinned ? ' pinned' : '') + '" onclick="pinRepo(\'' + r.id + '\')" title="' + (r.pinned ? 'Unpin' : 'Pin') + '">' + PIN_SVG + '</button>';
+  if (canSync) html += '<button class="sync-btn" onclick="syncRepo(\'' + r.id + '\')">Sync</button>';
+  if (canReindex) html += '<button class="reindex-btn" onclick="reindexRepo(\'' + r.id + '\')">Re-index</button>';
+  html += '<button class="delete-btn" onclick="deleteRepo(\'' + r.id + '\')">Delete</button>';
+  html += '</div>';
+  return html;
+}
+
+function initSortable() {
+  if (sortablePinned) { sortablePinned.destroy(); sortablePinned = null; }
+  if (sortableUnpinned) { sortableUnpinned.destroy(); sortableUnpinned = null; }
+
+  var sortMode = getRepoSort();
+  if (sortMode !== 'custom' || typeof Sortable === 'undefined') return;
+
+  var opts = {
+    handle: '.drag-handle',
+    animation: 150,
+    ghostClass: 'sortable-ghost',
+    chosenClass: 'sortable-chosen',
+    onStart: function() { isDragging = true; },
+    onEnd: function() { isDragging = false; saveRepoOrder(); },
+  };
+
+  var pinnedEl = document.getElementById('pinned-list');
+  var unpinnedEl = document.getElementById('unpinned-list');
+  if (pinnedEl.children.length > 0) sortablePinned = Sortable.create(pinnedEl, opts);
+  if (unpinnedEl.children.length > 0) sortableUnpinned = Sortable.create(unpinnedEl, opts);
+}
+
+async function saveRepoOrder() {
+  var pinnedEl = document.getElementById('pinned-list');
+  var unpinnedEl = document.getElementById('unpinned-list');
+  var order = [];
+  Array.from(pinnedEl.children).forEach(function(el) { order.push(el.dataset.id); });
+  Array.from(unpinnedEl.children).forEach(function(el) { order.push(el.dataset.id); });
+  try {
+    await fetch(API + '/api/repos/order', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ order: order }),
+    });
+  } catch (err) {
+    toast('Failed to save order: ' + err.message);
+  }
+  loadRepos();
+}
+
+async function pinRepo(id) {
+  try {
+    await fetch(API + '/api/repos/' + id + '/pin', { method: 'PATCH' });
+    loadRepos();
+    refreshRepoFilter();
+  } catch (err) {
+    toast('Failed to toggle pin: ' + err.message);
+  }
+}
 
 async function loadRepos() {
+  if (isDragging) return;
   try {
-    const resp = await fetch(API + '/api/repos');
-    const repos = await resp.json();
+    var resp = await fetch(API + '/api/repos');
+    var repos = await resp.json();
 
-    const listDiv = document.getElementById('repo-list');
-    const emptyDiv = document.getElementById('repos-empty');
+    var pinnedListDiv = document.getElementById('pinned-list');
+    var unpinnedListDiv = document.getElementById('unpinned-list');
+    var emptyDiv = document.getElementById('repos-empty');
+    var pinnedSep = document.getElementById('pinned-separator');
+    var unpinnedSep = document.getElementById('unpinned-separator');
 
     if (repos.length === 0) {
-      listDiv.innerHTML = '';
+      pinnedListDiv.textContent = '';
+      unpinnedListDiv.textContent = '';
+      pinnedSep.style.display = 'none';
+      unpinnedSep.style.display = 'none';
       emptyDiv.style.display = 'block';
       return;
     }
 
     emptyDiv.style.display = 'none';
-    listDiv.innerHTML = repos.map(r => {
-      const statusClass = typeof r.status === 'string' ? r.status : 'error';
-      const statusText = typeof r.status === 'string' ? r.status : `error: ${r.status.error}`;
-      const isProcessing = statusText === 'cloning' || statusText === 'indexing' || statusText === 'embedding';
-      const isReady = statusText === 'ready';
-      const isError = statusClass === 'error';
-      const canReindex = isReady || isError;
-      const canSync = isReady || isError;
-      return `
-        <div class="repo-card">
-          <div class="info">
-            <div class="name">${esc(r.name)}</div>
-            <div class="url">${esc(r.url)}</div>
-            <div class="meta">
-              ${r.file_count} files | Added ${new Date(r.added_at).toLocaleDateString()}
-              ${r.indexed_at ? ' | Indexed ' + timeAgo(r.indexed_at) : ''}
-            </div>
-          </div>
-          <span class="status-badge ${esc(statusClass)}">${isProcessing ? '<span class="spinner"></span>' : ''}${esc(statusText)}</span>
-          ${canSync ? `<button class="sync-btn" onclick="syncRepo('${r.id}')">Sync</button>` : ''}
-          ${canReindex ? `<button class="reindex-btn" onclick="reindexRepo('${r.id}')">Re-index</button>` : ''}
-          <button class="delete-btn" onclick="deleteRepo('${r.id}')">Delete</button>
-        </div>
-      `;
-    }).join('');
+    var sortMode = getRepoSort();
+
+    // Restore sort dropdown
+    var sortSel = document.getElementById('sort-repos');
+    if (sortSel.value !== sortMode) sortSel.value = sortMode;
+
+    // Split into pinned / unpinned, then apply sort within each group
+    var pinned = repos.filter(function(r) { return r.pinned; });
+    var unpinned = repos.filter(function(r) { return !r.pinned; });
+    pinned = sortReposList(pinned, sortMode);
+    unpinned = sortReposList(unpinned, sortMode);
+
+    // Show/hide section separators
+    var hasPinned = pinned.length > 0;
+    pinnedSep.style.display = hasPinned ? 'block' : 'none';
+    unpinnedSep.style.display = hasPinned ? 'block' : 'none';
+
+    // Render cards (all user content escaped via esc(), matching existing pattern)
+    pinnedListDiv.innerHTML = pinned.map(function(r) { return renderRepoCard(r, sortMode); }).join('');
+    unpinnedListDiv.innerHTML = unpinned.map(function(r) { return renderRepoCard(r, sortMode); }).join('');
+
+    initSortable();
 
     // Auto-poll if any repos are still processing
-    const processing = repos.some(r => r.status === 'cloning' || r.status === 'indexing' || r.status === 'embedding');
+    var processing = repos.some(function(r) { return r.status === 'cloning' || r.status === 'indexing' || r.status === 'embedding'; });
     if (processing && !repoPolling) {
       repoPolling = setInterval(loadRepos, 3000);
     } else if (!processing && repoPolling) {
